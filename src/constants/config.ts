@@ -1,11 +1,14 @@
+declare const __DEV__: boolean;
+
 export interface AuthConfig {
   apiUrl: string;
   portalUrl: string;
   clientId: string;
   redirectUri: string;
+  backendOrigin: string;
 }
 
-export function readAuthConfig(env: Record<string, string | undefined>): AuthConfig {
+export function readAuthConfig(env: Record<string, string | undefined>, development = false): AuthConfig {
   const origin = (key: string) => {
     const value = env[key];
     if (!value || value !== value.trim()) throw new Error(`Configure ${key}.`);
@@ -15,6 +18,7 @@ export function readAuthConfig(env: Record<string, string | undefined>): AuthCon
         url.pathname !== '/' || /[?#<>]/.test(value)) {
       throw new Error(`Invalid ${key}: use an HTTP(S) origin.`);
     }
+    if (!development && url.protocol !== 'https:') throw new Error(`HTTPS required for ${key}.`);
     return url.origin;
   };
   const clientId = env.EXPO_PUBLIC_OAUTH_CLIENT_ID?.trim();
@@ -29,6 +33,7 @@ export function readAuthConfig(env: Record<string, string | undefined>): AuthCon
   return {
     apiUrl: baseUrl + '/api',
     portalUrl: baseUrl, clientId, redirectUri,
+    backendOrigin: origin('EXPO_PUBLIC_APP_BACKEND_BASE_URL'),
   };
 }
 
@@ -38,5 +43,6 @@ export function getAuthConfig(): AuthConfig {
     EXPO_PUBLIC_RITA_BASE_URL: process.env.EXPO_PUBLIC_RITA_BASE_URL,
     EXPO_PUBLIC_OAUTH_CLIENT_ID: process.env.EXPO_PUBLIC_OAUTH_CLIENT_ID,
     EXPO_PUBLIC_OAUTH_REDIRECT_URI: process.env.EXPO_PUBLIC_OAUTH_REDIRECT_URI,
-  });
+    EXPO_PUBLIC_APP_BACKEND_BASE_URL: process.env.EXPO_PUBLIC_APP_BACKEND_BASE_URL,
+  }, __DEV__);
 }

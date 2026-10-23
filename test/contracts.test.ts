@@ -1,169 +1,155 @@
-import { test } from 'node:test';
+﻿import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readAuthConfig } from '../src/constants/config';
-import { ApiError, ContractError, createAuthApi, parseProfile } from '../src/services/auth-service';
+import { ApiError, ContractError, TransportError, createAuthApi, isExpiry, parseProfile } from '../src/services/auth-service';
+import { createBackendApi } from '../src/services/backend-service';
 import { authorizeUrl, base64Url, consumeCallback, randomHex } from '../src/services/oauth-flow';
 import { createSessionStorage, SESSION_KEY } from '../src/services/session-storage';
+import { config, expiry, user, wireProfile } from './fixtures';
+const env = { EXPO_PUBLIC_RITA_BASE_URL: config.portalUrl, EXPO_PUBLIC_APP_BACKEND_BASE_URL: config.backendOrigin,
+  EXPO_PUBLIC_OAUTH_CLIENT_ID: config.clientId };
 
-export const env = {
-  EXPO_PUBLIC_RITA_BASE_URL: 'http://localhost:3002', EXPO_PUBLIC_OAUTH_CLIENT_ID: 'test-client',
-};
-const config = readAuthConfig(env);
-export const profile = {
-  _id: '12345678-1234-4123-8123-123456789012', name: 'Test User', email: 'test@example.invalid',
-  employee_id: null, phone_number: null, is_developer: false, groups: 'EMPLOYEE' as const,
-};
-test('configuration requires explicit origins/client and rejects unsafe or legacy settings', () => {
-  assert.equal(config.redirectUri, 'rita-id-app://redirect');
-  assert.equal(readAuthConfig({ ...env, EXPO_PUBLIC_OAUTH_REDIRECT_URI: 'rita-id-app://redirect' }).redirectUri, config.redirectUri);
-  assert.throws(() => readAuthConfig({ ...env, EXPO_PUBLIC_OAUTH_REDIRECT_URI: 'ritaidapp://redirect' }));
+test('explicit origins, release HTTPS, exact callback, no legacy fallback', () => {
+  assert.equal(config.apiUrl, config.portalUrl + '/api');
   for (const key of Object.keys(env)) assert.throws(() => readAuthConfig({ ...env, [key]: '' }));
-  for (const value of ['ftp://host', 'https://user:pass@host', 'https://host/path', 'https://host?q=x', 'http://<HOST>:4000', 'https://host/api', 'https://host#fragment', 'https://host?', 'https://host#', ' https://host', 'https://host ']) {
-    assert.throws(() => readAuthConfig({ ...env, EXPO_PUBLIC_RITA_BASE_URL: value }));
+  for (const key of ['EXPO_PUBLIC_RITA_BASE_URL', 'EXPO_PUBLIC_APP_BACKEND_BASE_URL']) {
+    for (const value of ['ftp://host', 'https://user:pass@host', 'https://host/path', 'https://host?q=x',
+      'http://<HOST>:4000', 'https://host/api', 'https://host#fragment', 'https://host?', ' https://host', 'https://host ']) {
+      assert.throws(() => readAuthConfig({ ...env, [key]: value }));
+    }
+    assert.throws(() => readAuthConfig({ ...env, [key]: 'http://localhost:3003' }));
+    assert.doesNotThrow(() => readAuthConfig({ ...env, [key]: 'http://localhost:3003' }, true));
   }
-  assert.throws(() => readAuthConfig({ EXPO_PUBLIC_OAUTH_CLIENT_ID: 'client', EXPO_PUBLIC_OAUTH_AUTH_URL: 'http://old' }));
-  assert.throws(() => readAuthConfig({ ...env, EXPO_PUBLIC_OAUTH_REDIRECT_URI: 'other://redirect' }));
-});
-test('one origin derives portal and API URLs without legacy fallback', async () => {
-  assert.throws(() => readAuthConfig({ EXPO_PUBLIC_OAUTH_CLIENT_ID: 'client', EXPO_PUBLIC_RITA_API_URL: 'https://old.test/api', EXPO_PUBLIC_RITA_PORTAL_URL: 'https://old.test' }), /EXPO_PUBLIC_RITA_BASE_URL/);
-  for (const [input, expected] of [
-    ['http://192.168.1.10:3002', 'http://192.168.1.10:3002'],
-    ['http://192.168.1.10:3002/', 'http://192.168.1.10:3002'],
-    ['https://id.example.com', 'https://id.example.com'],
-    ['https://id.example.com/', 'https://id.example.com'],
-    ['https://id.example.com:8443/', 'https://id.example.com:8443'],
-  ]) {
-    const settings = readAuthConfig({ ...env, EXPO_PUBLIC_RITA_BASE_URL: input });
-    assert.equal(settings.portalUrl, expected);
-    assert.equal(settings.apiUrl, expected + '/api');
-    assert.equal(authorizeUrl(settings, 'state', 'challenge'), expected + '/oauth/authorize?client_id=test-client&redirect_uri=rita-id-app%3A%2F%2Fredirect&response_type=code&scope=openid+profile+email&state=state&code_challenge=challenge&code_challenge_method=S256');
-    const urls: string[] = [];
-    const api = createAuthApi(settings, async url => {
-      urls.push(String(url));
-      if (String(url).endsWith('/userinfo')) return Response.json(profile);
-      if (String(url).endsWith('/token')) return Response.json({ access_token: 'a', refresh_token: 'r', token_type: 'Bearer', expires_in: 300 });
-      return Response.json({ success: true, accessToken: 'a', refreshToken: 'r' });
-    });
-    await api.exchange('code', 'verifier');
-    await api.profile('a');
-    await api.refresh('r');
-    await api.logout('r');
-    assert.deepEqual(urls, ['/api/auth/oauth/token', '/api/auth/oauth/userinfo', '/api/auth/refresh', '/api/auth/logout'].map(path => expected + path));
-  }
+  assert.throws(() => readAuthConfig({ ...env, EXPO_PUBLIC_OAUTH_REDIRECT_URI: 'ritaidapp://redirect' }));
 });
 test('PKCE encoding and authorize contract', () => {
   const verifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
-  const challenge = base64Url(createHash('sha256').update(verifier).digest('base64'));
-  assert.equal(challenge, 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM');
+  assert.equal(base64Url(createHash('sha256').update(verifier).digest('base64')), 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM');
   assert.equal(randomHex(new Uint8Array(32)).length, 64);
-  const url = new URL(authorizeUrl(config, 'state', challenge));
+  const url = new URL(authorizeUrl(config, 'state', 'challenge'));
   assert.equal(url.origin, config.portalUrl);
   assert.equal(url.pathname, '/oauth/authorize');
   assert.equal(url.searchParams.get('scope'), 'openid profile email');
   assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
-  assert.equal(url.searchParams.get('redirect_uri'), config.redirectUri);
+  assert.equal(url.searchParams.get('redirect_uri'), 'rita-id-app://redirect');
   assert.equal(url.searchParams.has('client_secret'), false);
 });
-test('callback requires exact target, one-use unexpired state and unique query fields', () => {
+test('callback is exact, unique, unexpired and single-use', () => {
   const pending = () => ({ state: 'state', verifier: 'verifier', expiresAt: 100, used: false });
   const attempt = pending();
   assert.equal(consumeCallback('rita-id-app://redirect?state=state&code=code', config.redirectUri, attempt, 0), 'code');
   assert.throws(() => consumeCallback('rita-id-app://redirect?state=state&code=code', config.redirectUri, attempt, 0));
-  for (const url of [
-    'ritaidapp://redirect?state=state&code=code',
-    'other://redirect?state=state&code=code', 'rita-id-app://wrong?state=state&code=code',
-    'rita-id-app://redirect/path?state=state&code=code', 'rita-id-app://redirect?state=wrong&error=denied',
-    'rita-id-app://redirect?state=state&error=denied', 'rita-id-app://redirect?state=state',
-    'rita-id-app://redirect?state=state&state=state&code=code',
-    'rita-id-app://redirect?state=state&code=a&code=b', 'rita-id-app://redirect?state=state&code=x#fragment',
-  ]) assert.throws(() => consumeCallback(url, config.redirectUri, pending(), 0));
+  for (const url of ['ritaidapp://redirect?state=state&code=code', 'other://redirect?state=state&code=code',
+    'rita-id-app://wrong?state=state&code=code', 'rita-id-app://redirect/path?state=state&code=code',
+    'rita-id-app://redirect?state=wrong&error=denied', 'rita-id-app://redirect?state=state&error=denied',
+    'rita-id-app://redirect?state=state', 'rita-id-app://redirect?state=state&state=state&code=code',
+    'rita-id-app://redirect?state=state&code=a&code=b', 'rita-id-app://redirect?state=state&code=x#fragment']) {
+    assert.throws(() => consumeCallback(url, config.redirectUri, pending(), 0));
+  }
   assert.throws(() => consumeCallback('rita-id-app://redirect?state=state&code=x', config.redirectUri, pending(), 100));
 });
-test('userinfo checks seven fields and permits all groups without developer eligibility filtering', () => {
-  for (const groups of ['EMPLOYEE', 'CUSTOMER', 'ENTERPRISE']) {
-    assert.deepEqual(parseProfile({ ...profile, groups, ignored: 'discard' }), { ...profile, groups });
+test('B profile maps sub to local UUID, validates nested fields and strips unknown data', () => {
+  assert.deepEqual(parseProfile({ ...wireProfile, ignored: 'secret' }), user);
+  for (const key of Object.keys(wireProfile)) assert.throws(() => parseProfile({ ...wireProfile, [key]: undefined }), ContractError);
+  for (const groups of ['EMPLOYEE', 'CUSTOMER', 'ENTERPRISE']) assert.equal(parseProfile({ ...wireProfile, groups }).groups, groups);
+  for (const patch of [{ sub: 'bad' }, { groups: 'DEVELOPER' }, { avatar: 4 },
+    { position: { text: null, parser: {} } },
+    { position: { ...wireProfile.position, parser: { ...wireProfile.position.parser, others: [1] } } }]) {
+    assert.throws(() => parseProfile({ ...wireProfile, ...patch }), ContractError);
   }
-  assert.equal(parseProfile({ ...profile, is_developer: true }).is_developer, true);
-  assert.equal(parseProfile({ ...profile, employee_id: 'E123', phone_number: '123' }).employee_id, 'E123');
-  for (const key of Object.keys(profile)) {
-    assert.throws(() => parseProfile({ ...profile, [key]: undefined }), ContractError);
-    assert.throws(() => parseProfile({ ...profile, [key]: 42 }), ContractError);
-  }
-  for (const value of [null, [], { ...profile, groups: 'DEVELOPER' }, { ...profile, _id: undefined, sub: profile._id }]) {
-    assert.throws(() => parseProfile(value), ContractError);
-  }
+  assert.ok(isExpiry(expiry)); assert.ok(isExpiry('2030-01-01T00:00:00Z'));
+  for (const value of ['2030-02-30T00:00:00Z', '2030-01-01', '2030-01-01T00:00:00+00:00']) assert.equal(isExpiry(value), false);
 });
-test('HTTP uses current endpoints, validates response shapes and omits cookies/secrets', async () => {
-  const calls: { path: string; url: string; init: RequestInit }[] = [];
-  const api = createAuthApi(config, async (url, init = {}) => {
-    const path = new URL(String(url)).pathname;
-    calls.push({ path, url: String(url), init });
-    if (path.endsWith('/userinfo')) return Response.json(profile);
-    if (path.endsWith('/token')) return Response.json({ access_token: 'access', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 300, id_token: 'discard' });
-    if (path.endsWith('/refresh')) return Response.json({ success: true, accessToken: 'new-access', refreshToken: 'new-refresh' });
-    return Response.json({ success: true });
-  });
-  assert.deepEqual(await api.exchange('code', 'verifier'), { accessToken: 'access', refreshToken: 'refresh' });
-  assert.deepEqual(await api.profile('access'), profile);
-  assert.deepEqual(await api.refresh('refresh'), { accessToken: 'new-access', refreshToken: 'new-refresh' });
-  await api.logout('new-refresh');
-  assert.deepEqual(calls.map(call => call.path), ['/api/auth/oauth/token', '/api/auth/oauth/userinfo', '/api/auth/refresh', '/api/auth/logout']);
-  assert.deepEqual(calls.map(call => call.url), ['http://localhost:3002/api/auth/oauth/token', 'http://localhost:3002/api/auth/oauth/userinfo', 'http://localhost:3002/api/auth/refresh', 'http://localhost:3002/api/auth/logout']);
-  assert.deepEqual(JSON.parse(String(calls[0].init.body)), { grant_type: 'authorization_code', client_id: 'test-client', redirect_uri: config.redirectUri, code: 'code', code_verifier: 'verifier' });
-  assert.deepEqual(JSON.parse(String(calls[2].init.body)), { refreshToken: 'refresh' });
+test('separate transports: code to Rita, token pair only to handoff, X only to B resources', async () => {
+  const calls: { url: string; init: RequestInit }[] = [];
+  const request: typeof fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith('/token')) return Response.json({ access_token: 'oauth-access', refresh_token: 'oauth-refresh', token_type: 'Bearer', expires_in: 300 });
+    if (String(url).endsWith('/logout')) return Response.json({ loggedOut: true, revokeConfirmed: true });
+    return Response.json({ sessionKey: 'opaque-X', expiresAt: expiry, profile: wireProfile });
+  };
+  const rita = createAuthApi(config, request); const backend = createBackendApi(config, request);
+  const tokens = await rita.exchange('code', 'verifier');
+  await backend.handoff({ ...tokens, handoffId: 'h', clientId: config.clientId });
+  await backend.me('opaque-X');
+  await backend.privateRequest('opaque-X', '/api/mobile/private/example', { method: 'POST', body: { value: 1 } });
+  await backend.logout('opaque-X');
+  assert.deepEqual(calls.map(c => c.url), [config.apiUrl + '/auth/oauth/token',
+    ...['/api/mobile/auth/session', '/api/mobile/me', '/api/mobile/private/example', '/api/mobile/auth/logout'].map(p => config.backendOrigin + p)]);
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)), { grant_type: 'authorization_code',
+    client_id: config.clientId, redirect_uri: config.redirectUri, code: 'code', code_verifier: 'verifier' });
   for (const { init } of calls) {
-    assert.equal(init.credentials, 'omit');
-    assert.equal(init.redirect, 'error');
+    assert.equal(init.credentials, 'omit'); assert.equal(init.redirect, 'error');
     assert.equal(new Headers(init.headers).has('Cookie'), false);
-    assert.doesNotMatch(String(init.body), /client_secret|grant_type.*refresh_token/);
+    assert.doesNotMatch(String(init.body), /client_secret/);
   }
-});
-test('malformed token, refresh and logout responses are rejected', async () => {
-  for (const body of [null, {}, { access_token: 'x', token_type: 'Bearer' }, { success: true, accessToken: 'x' }]) {
-    const api = createAuthApi(config, async () => Response.json(body));
-    await assert.rejects(api.exchange('x', 'x'), ContractError);
-    await assert.rejects(api.refresh('x'), ContractError);
+  for (const { init } of calls.slice(2)) {
+    assert.equal(new Headers(init.headers).get('Authorization'), 'Bearer opaque-X');
+    assert.doesNotMatch(String(init.body), /oauth-access|oauth-refresh/);
   }
-  await assert.rejects(createAuthApi(config, async () => Response.json({})).logout('x'), ContractError);
+  assert.equal(calls[4].init.body, undefined);
 });
-test('timeouts and HTTP failures do not retry or expose response text', async () => {
-  let calls = 0;
-  const api = createAuthApi(config, async (_url, init) => {
-    calls++;
-    return new Promise((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(new Error('aborted'))));
-  }, 5);
-  await assert.rejects(api.refresh('x'));
-  assert.equal(calls, 1);
-  const errorApi = createAuthApi(config, async () => new Response('sensitive upstream data', { status: 401 }));
-  await assert.rejects(errorApi.profile('x'), error => error instanceof ApiError && error.status === 401 && !error.message.includes('sensitive'));
+test('private requests reject foreign, encoded, normalized and auth paths before sending', async () => {
+  let count = 0;
+  const backend = createBackendApi(config, async () => { count++; return Response.json({}); });
+  for (const path of ['https://evil.test', '//evil.test', '/api/mobile/../auth', '/api/mobile/%2e%2e/auth',
+    '/api/mobile/\\evil', '/api/mobile//evil', '/api/mobile/auth/session', '/api/mobile/me?token=x', '/auth/oauth/userinfo']) {
+    await assert.rejects(backend.privateRequest('X', path), ContractError);
+  }
+  assert.equal(count, 0);
 });
-test('storage migrates legacy keys, validates records and stores a single credential pair', async () => {
-  const values = new Map<string, string>([['oauth_access_token', 'old'], ['oauth_refresh_token', 'old-refresh']]);
-  const storage = createSessionStorage({
-    getItemAsync: async key => values.get(key) ?? null,
-    setItemAsync: async (key, value) => { values.set(key, value); },
-    deleteItemAsync: async key => { values.delete(key); },
+test('malformed responses rejected; malformed handoff with known X is closed', async () => {
+  for (const body of [null, {}, { access_token: 'x', token_type: 'Bearer' }]) {
+    await assert.rejects(createAuthApi(config, async () => Response.json(body)).exchange('x', 'x'), ContractError);
+    await assert.rejects(createBackendApi(config, async () => Response.json(body)).me('X'), ContractError);
+  }
+  const paths: string[] = [];
+  const api = createBackendApi(config, async url => {
+    paths.push(String(url)); return Response.json({ sessionKey: 'X', expiresAt: expiry, profile: {} });
   });
-  assert.equal(await storage.load(), null);
-  assert.equal(values.size, 0);
-  const session = { version: 1 as const, accessToken: 'a', refreshToken: 'r', userId: profile._id };
-  await storage.save(session);
+  await assert.rejects(api.handoff({ handoffId: 'h', clientId: 'c', accessToken: 'a', refreshToken: 'r' }), ContractError);
+  assert.ok(paths[1].endsWith('/auth/logout'));
+  await assert.rejects(api.logout('X'), ContractError);
+});
+test('timeout does not retry and errors do not expose upstream response', async () => {
+  let calls = 0;
+  const api = createBackendApi(config, async (_url, init) => {
+    calls++;
+    return new Promise((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(new Error('secret'))));
+  }, 5);
+  await assert.rejects(api.me('X'), TransportError); assert.equal(calls, 1);
+  await assert.rejects(createBackendApi(config, async () => new Response('secret', { status: 401 })).me('X'),
+    error => error instanceof ApiError && error.status === 401 && !error.message.includes('secret'));
+  await assert.rejects(createBackendApi(config, async () => new Response('', { status: 429, headers: { 'Retry-After': '30' } })).me('X'),
+    error => error instanceof ApiError && error.retryAt > Date.now() + 28_000);
+});
+test('storage removes every legacy version and persists only the allowlisted X record', async () => {
+  const values = new Map<string, string>();
+  const storage = createSessionStorage({ getItemAsync: async k => values.get(k) ?? null,
+    setItemAsync: async (k, v) => { values.set(k, v); }, deleteItemAsync: async k => { values.delete(k); } });
+  for (const legacy of ['rita_session_v1', 'oauth_access_token', 'oauth_refresh_token']) {
+    values.set(legacy, 'secret'); assert.equal(await storage.load(), null); assert.equal(values.size, 0);
+  }
+  const session = { version: 2 as const, sessionKey: 'X', userId: user._id, expiresAt: expiry, backendOrigin: config.backendOrigin };
+  await storage.save({ ...session, accessToken: 'must-not-persist' } as typeof session);
   assert.deepEqual(await storage.load(), session);
-  assert.equal(values.size, 1);
-  values.set(SESSION_KEY, '{broken');
-  assert.equal(await storage.load(), null);
-  await storage.clear();
-  assert.equal(values.size, 0);
+  assert.doesNotMatch(values.get(SESSION_KEY)!, /accessToken|must-not/);
+  for (const raw of ['{broken', JSON.stringify({ ...session, expiresAt: 'bad' }), JSON.stringify({ ...session, version: 1 })]) {
+    values.set(SESSION_KEY, raw); assert.equal(await storage.load(), null);
+  }
+});
+test('cleanup attempts all keys despite a deletion failure', async () => {
+  const removed: string[] = [];
+  const storage = createSessionStorage({ getItemAsync: async () => null, setItemAsync: async () => {},
+    deleteItemAsync: async key => { removed.push(key); if (key === SESSION_KEY) throw new Error('failed'); } });
+  await assert.rejects(storage.clear());
+  assert.deepEqual(removed.sort(), ['rita_session_v1', 'oauth_access_token', 'oauth_refresh_token', SESSION_KEY].sort());
 });
 
-test('secure storage cleanup attempts every key even when deletion fails', async () => {
-  const removed: string[] = [];
-  const storage = createSessionStorage({
-    getItemAsync: async () => null,
-    setItemAsync: async () => {},
-    deleteItemAsync: async key => { removed.push(key); if (key === SESSION_KEY) throw new Error('storage'); },
-  });
-  await assert.rejects(storage.clear());
-  assert.deepEqual(removed.sort(), ['oauth_access_token', 'oauth_refresh_token', SESSION_KEY].sort());
+test('body transport failure is sanitized and distinct from malformed JSON', async () => {
+  const response = Response.json({});
+  response.json = async () => { throw new TypeError('sensitive transport details'); };
+  await assert.rejects(createBackendApi(config, async () => response).me('X'), TransportError);
+  await assert.rejects(createBackendApi(config, async () => new Response('{broken')).me('X'), ContractError);
 });

@@ -2,17 +2,20 @@ import { NativeTabs } from 'expo-router/unstable-native-tabs';
 import React from 'react';
 import { useColorScheme } from 'react-native';
 
-import { Colors } from '@/constants/theme';
+import { HomeColors } from '@/constants/theme';
 
 export default function AppTabs() {
   const scheme = useColorScheme();
-  const colors = Colors[scheme === 'unspecified' ? 'light' : scheme];
+  const colors = HomeColors[scheme === 'dark' ? 'dark' : 'light'];
 
   return (
     <NativeTabs
-      backgroundColor={colors.background}
-      indicatorColor={colors.backgroundElement}
-      labelStyle={{ selected: { color: colors.text } }}>
+      backgroundColor={colors.surface}
+      indicatorColor={colors.accent}
+      tintColor={colors.brand}
+      iconColor={{ default: colors.textSecondary, selected: colors.brand }}
+      disableTransparentOnScrollEdge
+      labelStyle={{ default: { color: colors.textSecondary }, selected: { color: colors.brand } }}>
       <NativeTabs.Trigger name="index">
         <NativeTabs.Trigger.Label>Home</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon

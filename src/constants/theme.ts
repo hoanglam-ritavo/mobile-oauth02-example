@@ -26,6 +26,20 @@ export const Colors = {
 
 export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 
+// Scoped to Home and signed-in navigation; existing screens keep their palette.
+export const HomeColors = {
+  light: {
+    background: '#F6F7F9', surface: '#FFFFFF', text: '#182230',
+    textSecondary: '#596579', border: '#E3E7ED', brand: '#C81743', accent: '#FFF0F4',
+  },
+  dark: {
+    background: '#111318', surface: '#1B1F27', text: '#F3F4F6',
+    textSecondary: '#AAB4C3', border: '#343C49', brand: '#FF7898', accent: '#38212B',
+  },
+} as const;
+
+export type HomePalette = (typeof HomeColors)[keyof typeof HomeColors];
+
 export const Fonts = Platform.select({
   ios: {
     /** iOS `UIFontDescriptorSystemDesignDefault` */

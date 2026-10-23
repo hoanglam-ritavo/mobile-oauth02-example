@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from "react";
 import { AppState, Platform } from 'react-native';
 import { createNativeAuthSession } from '../services/auth-runtime';
 import type { AuthSession, AuthState } from '../services/auth-session';
+import type { PrivateRequest } from '../services/backend-service';
 
 interface AuthContextType extends AuthState {
   isLoading: boolean;
@@ -10,6 +11,7 @@ interface AuthContextType extends AuthState {
   login: () => Promise<void>;
   logout: () => Promise<void>;
   retry: () => Promise<void>;
+  request: (path: string, options?: PrivateRequest) => Promise<unknown>;
 }
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const noop = async () => {};
@@ -40,7 +42,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     <AuthContext.Provider value={{
       ...state, isLoading: state.status === 'loading', supported: Platform.OS !== 'web',
       configured: !!runtime.session, login: runtime.session?.login ?? noop,
-      logout: runtime.session?.logout ?? noop, retry: runtime.session?.verify ?? noop,
+      logout: runtime.session?.logout ?? noop, retry: runtime.session?.retry ?? noop,
+      request: runtime.session ? runtime.session.authorized.bind(runtime.session) : async () => {
+        throw new Error('Application session is unavailable.');
+      },
     }}>
       {children}
     </AuthContext.Provider>

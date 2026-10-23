@@ -1,129 +1,176 @@
-# Rita ID Mobile
+﻿# Rita ID Mobile integration example
 
-Ứng dụng Expo/React Native cho Android và iOS, đăng nhập SSO qua Rita ID Portal bằng Authorization Code + PKCE S256. Backend xác minh access token khi app gọi userinfo. App không nhập mật khẩu Odoo, không nhúng client secret, không xác thực bằng ID token hoặc decode JWT.
+Expo/React Native example for Android and iOS. This source is application **A**; the sibling OAuth Web Example provides application backend **B**. Rita ID is the identity provider. The current package uses Expo 57, React 19 and React Native 0.86 with Expo Router.
 
-## Shared origin configuration - 2026-10-23
+**A requires B's mobile endpoints.** They now exist in the sibling source when mobile mode is enabled. Source availability does not establish live end-to-end compatibility. B is a single-process RAM demo: restart loses sessions, multiple workers are unsupported and production mode is rejected. There is no direct-token fallback or bundled mock server in A.
 
-Verification: revision `dfb5c41` plus the existing scheme changes and this shared-origin working tree. `npm run typecheck` passed; `npm test` passed **28/28** with mocked HTTP/storage/browser; `git diff --check` passed (line-ending warnings only). The initial sandbox test run was blocked by subprocess `spawn EPERM`; the permitted rerun passed. No native build, live OAuth requests, proxy checks or database changes were performed.
+Read [Architecture](ARCHITECTURE.md) for runtime behavior and [Agent guidance](AGENTS.md) before changing this source.
 
-Configure only EXPO_PUBLIC_RITA_BASE_URL for Rita ID routing. For example, https://id.example.com produces portal https://id.example.com/oauth/authorize and API https://id.example.com/api/auth/oauth/token. Every API request retains exactly one /api prefix. The input must not contain /api. Direct backend origins without the /api proxy are no longer supported by this configuration.
+## Flow
 
-Development: use the device-reachable portal origin (for example http://<HOST>:3002). With ENV_MODE=development, the portal Next.js rewrite forwards /api/* to backend /*, removing the prefix. Production: the reverse proxy must provide the equivalent routing; Next.js does not automatically enable that rewrite outside development. No proxy or backend configuration is changed here.
+1. A opens Rita ID Portal in the system browser using Authorization Code + PKCE S256.
+2. A validates the one-use state and exact `rita-id-app://redirect` callback, then exchanges the code directly with Rita ID.
+3. A holds the OAuth token pair only in memory and hands it to B.
+4. B validates the handoff and returns an opaque application session key X, expiration and verified profile.
+5. A stores only X and session metadata in SecureStore. All subsequent profile/private/logout requests go to B with `Authorization: Bearer X`.
 
-Restart Metro and reload the app after updating environment values. This URL-only change does not require native prebuild or a scheme change. Local .env was migrated using its existing portal origin, preserving client ID, callback and unrelated values. Keep .env uncommitted. Existing scheme changes and their historical checks below are preserved.
+B owns OAuth token refresh/revocation. A does not decode JWTs or call Rita ID userinfo, refresh or logout. Rita ID's browser SSO cookie is not logged out when A signs out.
 
-The endpoint paths in the contract table below are relative to the derived API base (origin + /api). Refresh and logout still use the old direct-session contract; this change does not fix OAuth refresh/revoke compatibility. Mock verification cannot establish live reverse-proxy routing or device login.
+The [A–B contract](docs/mobile-backend-contract.md) records phase-1 fields and requirements. Its claim that B is not implemented is historical. Consult [B's current mobile guide](../oauth02-web-integration-example/docs/mobile-backend.md) for implemented behavior and the accepted limit of token validation: identity/client/scope consistency does not prove both original tokens belong to the same grant. Neither document establishes full OIDC support. Sibling links assume the standard adjacent checkouts.
 
-## URL scheme update ? 2026-10-23
+## Configuration and native setup
 
-The current callback is `rita-id-app://redirect`; the old `ritaidapp://redirect` is rejected. Register the exact new callback on a backend **public** client before testing. The portal currently defaults client creation to confidential, so its existing registration form alone does not provision the required public client. No backend client or database was modified by this change.
-
-`app.json`, runtime configuration, `.env.example`, local `.env`, callback fixtures and the local Android manifest are aligned. Only EXPO_PUBLIC_OAUTH_REDIRECT_URI changed in local `.env`. Android package/applicationId and Kotlin namespaces remain `com.kompact.ritaidapp`. The Android directory and `.env` are Git-ignored: the manifest edit is local and is not included in the tracked diff. Existing native checkouts must align their manifest; future native generation should use the updated app config. No prebuild was run. There is no native iOS directory in this checkout.
-
-Rebuild and reinstall the native app with `npm run android` after connecting a device/emulator; Metro reload alone does not register the new scheme. Verify deep-link opening, login/consent/callback/userinfo and denied consent on a native build, not Expo Go. iOS validation requires a macOS native build and device/simulator.
-
-Executed against revision `dfb5c41` plus this scheme-only working tree: `npm run typecheck` passed; `npm test` passed **27/27**, including acceptance of the new callback and rejection of the old scheme. The first test run was blocked by sandbox subprocess `spawn EPERM`; the permitted rerun passed. `git diff --check` passed with line-ending conversion warnings only. ADB listed no connected devices. Native build/install, Android/iOS callback smoke tests and live backend integration were not run.
-
-This update does not repair the existing refresh/logout mismatch: the mobile adapter still calls direct `/auth/refresh` and `/auth/logout`, while current backend OAuth sessions require `/auth/oauth/token` with the refresh_token grant and `/auth/oauth/revoke`. The older backend compatibility descriptions below reflect the previous integration contract; passing mock tests does not establish compatibility with the current backend or completion of the OAuth session lifecycle.
-
-## Thiết lập
-
-Dùng Node.js 24 và npm với `package-lock.json`. Không nâng cấp Expo/React Native để xử lý cấu hình OAuth.
+Use Node.js 24 and the committed npm lockfile. From this mobile project root:
 
 ```powershell
 npm ci
-Copy-Item .env.example .env
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-Chỉ copy nếu chưa có `.env`; không ghi đè môi trường hoặc commit thông tin tài khoản. Điền các biến sau, rồi khởi động lại Metro:
+Create `.env` from `.env.example` only if it does not already exist. Existing local `.env` is not migrated automatically.
 
-| Biến | Giá trị |
+| Variable | Purpose |
 | --- | --- |
-| `EXPO_PUBLIC_RITA_BASE_URL` | Shared portal origin, e.g. `http://<HOST>:3002`; API base is derived as origin + `/api` |
-| `EXPO_PUBLIC_OAUTH_CLIENT_ID` | Client ID đăng ký trên portal; bắt buộc |
-| `EXPO_PUBLIC_OAUTH_REDIRECT_URI` | `rita-id-app://redirect`; khớp scheme native hiện tại |
+| `EXPO_PUBLIC_RITA_BASE_URL` | Rita ID portal origin, e.g. `https://id.example.com`; API base is this origin plus `/api`. |
+| `EXPO_PUBLIC_APP_BACKEND_BASE_URL` | Application B origin, e.g. `https://app.example.com`; mobile paths include `/api/mobile`. Required. |
+| `EXPO_PUBLIC_OAUTH_CLIENT_ID` | Registered **public** mobile client ID; must also be allowed by B. |
+| `EXPO_PUBLIC_OAUTH_REDIRECT_URI` | Exactly `rita-id-app://redirect`; this is also the parser default when omitted. |
 
-Thay `<HOST>` bằng host thực. Android emulator thường dùng `10.0.2.2` để truy cập máy host; thiết bị thật dùng IP LAN/domain truy cập được. `localhost` trên điện thoại là chính điện thoại. Backend/portal phải lắng nghe trên địa chỉ phù hợp và portal cần cấu hình API truy cập được từ trình duyệt trên thiết bị. HTTP phục vụ phát triển; môi trường triển khai cần HTTPS. Android debug hiện cho phép cleartext; không mở rộng chính sách release trong thay đổi này.
+Both base URLs are origins only: no path, credentials, query or fragment. HTTP is accepted only in the development runtime; release builds require HTTPS for both origins. Every `EXPO_PUBLIC_*` variable is public bundle data. Never add a client secret.
 
-Không thêm `/api`, path, credentials, query hoặc fragment vào origin. Không có fallback về IP hoặc client ID cũ. Các biến `EXPO_PUBLIC_OAUTH_AUTH_URL`, `EXPO_PUBLIC_OAUTH_TOKEN_URL`, `EXPO_PUBLIC_OAUTH_USER_INFO_URL` không còn được đọc; thay bằng hai origin mới. Mọi biến `EXPO_PUBLIC_*` đều có thể nằm trong bundle, tuyệt đối không chứa client secret. File `.env` hiện có không được tự động sửa.
+Use a device-reachable Rita Portal origin whose `/api` routes reach Rita ID Backend. A appends `/api` itself; do not put that path into either origin variable. Proxy configuration belongs to the portal/server deployment.
 
-Đăng nhập portal bằng tài khoản được phép quản lý developer clients và tạo client:
+### Start application backend B
 
-- Redirect URI chính xác: `rita-id-app://redirect`.
-- Scopes: `openid`, `profile`, `email`.
-- Luồng: `authorization_code` với PKCE S256. Không gửi client secret từ native. Backend hiện cho đổi code có PKCE mà không yêu cầu secret; điều này không chứng minh hỗ trợ đầy đủ public-client/OIDC.
+In a separate terminal, from the sibling `oauth02-web-integration-example` root:
 
-## Chạy native và web
+```powershell
+npm ci
+if (!(Test-Path .mobile.env)) { Copy-Item .mobile.env.example .mobile.env }
+# Configure the new file before starting the server.
+npm run dev:mobile
+```
+
+Set B's `RITA_MOBILE_CLIENT_ID` to A's `EXPO_PUBLIC_OAUTH_CLIENT_ID` and configure B's `RITA_API_URL` to reach Rita ID from the server. The mobile template uses port `3004` and `HOST=127.0.0.1`; the web template uses `3003`. The mobile profile reads `.mobile.env`, not the legacy `.env`. See [B's profile setup](../oauth02-web-integration-example/README.md#separate-mobile-process-and-legacy-startup) for precedence and compiled startup commands.
+
+For the standard Android emulator, A can use `http://10.0.2.2:3004` to reach B on the host. For a physical device, use `http://<computer-LAN-IP>:3004`, bind B to a reachable interface (for example `HOST=0.0.0.0` in a controlled local test) and allow the port through the firewall. `0.0.0.0` is a bind address, not A's destination. A physical device's `localhost` refers to itself. Apply the same device-reachability rule to the Rita Portal origin; use its actual configured port.
+
+### Build and run A
+
+Register the exact mobile callback and a public client with `authorization_code` and `refresh_token` grants and `openid profile email` scopes in Rita ID before live testing. The browser example's confidential client is a separate client; do not reuse its secret. Do not assume the portal UI provisions public clients; use the supported provisioning process for your Rita ID environment.
+
+Android requires the Android SDK, compatible JDK, Android tooling and an emulator or connected device. iOS requires macOS, Xcode and appropriate signing; it cannot be built on this Windows host.
 
 ```powershell
 npm run android
-# macOS với Xcode và thiết lập signing phù hợp:
+# Requires macOS, Xcode and appropriate signing:
 npm run ios
 ```
 
-OAuth cần bản build native có URL scheme `rita-id-app`, không dùng Expo Go để nghiệm thu callback. Xem [hướng dẫn OAuth của Expo](https://docs.expo.dev/guides/authentication/). Scheme đã khai báo trong `app.json` và Android manifest. Không đổi callback độc lập với native registration. iOS cần máy macOS; bundle iOS xuất được trên Windows không có nghĩa native build đã được kiểm chứng.
+Native callback acceptance needs a build with the registered URL scheme, not Expo Go. Restart Metro after changing public environment variables. Rebuild/reinstall when changing a native scheme. `app.json` registers `rita-id-app` and Android package `com.kompact.ritaidapp`. `npm start` starts Metro; `npm run web` starts the web preview, where sign-in is deliberately unsupported.
 
-`npm start` chạy Metro. `npm run web` chỉ dành cho preview: web hiển thị thông báo đăng nhập chỉ hỗ trợ Android/iOS và không gọi SecureStore hoặc native browser. Không có callback/phiên đăng nhập web trong phạm vi này.
+## Sessions and application requests
 
-## Hợp đồng và vòng đời phiên
+Only X and session metadata are persisted in SecureStore. Legacy OAuth-token records require a new login. Startup and foreground verification hide identity until B validates the session. See [session lifecycle and storage](ARCHITECTURE.md#session-lifecycle-and-storage) for the exact record, migration behavior and failure handling.
 
-| Thao tác | Hợp đồng |
-| --- | --- |
-| Authorize | Trình duyệt tới portal `/oauth/authorize`, state + PKCE S256, scopes `openid profile email` |
-| Exchange | POST `/auth/oauth/token`, JSON authorization code/client ID/redirect URI/verifier; response snake_case |
-| Userinfo | GET `/auth/oauth/userinfo`, Bearer access token |
-| Refresh | POST `/auth/refresh`, JSON `{ refreshToken }`; response `{ success, accessToken, refreshToken }` |
-| Logout | POST `/auth/logout`, JSON `{ refreshToken }` |
+Components can call `useAuth().request('/api/mobile/private/example')` for B's existing GET demo resource. The helper supports GET/POST/PUT/PATCH/DELETE for resources that implement those methods, returns unknown JSON for callers to validate and hides X. Only literal `/api/mobile/` resource paths are accepted; auth paths, query strings, encoded paths and external URLs are rejected. There is no dedicated private-resource screen; Home renders the verified profile.
 
-API requests bỏ cookie và có timeout 10 giây. Không gọi OAuth refresh grant hoặc revoke endpoint. Token exchange/refresh không tự retry sau lỗi mạng hoặc timeout.
+A 401 ends the application session; A never refreshes or replays resource requests. A 403 is a permission error. Temporary verification failures hide identity and allow retry. Handoff failures may offer a manual retry within two minutes. Sign-out clears local state and reports when server revocation cannot be confirmed; failed local cleanup requires retrying sign-out before a new login.
 
-Userinfo gồm đúng các field app sử dụng: `_id` (local UUID), `name`, `email`, `employee_id`, `phone_number`, `is_developer`, `groups`. Employee code và số điện thoại có thể null; groups là `EMPLOYEE`, `CUSTOMER`, `ENTERPRISE`. `_id` không phải employee code hoặc numeric Odoo ID. App hiển thị danh tính thật, avatar chữ cái đầu, group/developer; không có barcode hoặc ảnh chân dung mẫu. Developer chỉ là dữ liệu hiển thị, không phải điều kiện đăng nhập.
+## Validation
 
-Mỗi lần đăng nhập có một attempt trong bộ nhớ, hết hạn sau 10 phút. Callback phải đúng scheme/host/path, state đúng và không có query trùng lặp. Attempt chỉ dùng một lần; callback cũ hoặc callback sau khi tiến trình bị đóng không tạo phiên. App chỉ lưu token sau khi userinfo hợp lệ. Không ghi log code, callback URL, token hoặc profile.
+### Home screen presentation
 
-SecureStore lưu một JSON record `rita_session_v1` gồm version, access token, refresh token và UUID tài khoản. Hai key legacy `oauth_access_token`, `oauth_refresh_token` được xóa và yêu cầu đăng nhập lại một lần. Không lưu mật khẩu/ID token/profile vào record. Nếu không xóa được SecureStore, app ẩn danh tính, chặn đăng nhập và yêu cầu thử đăng xuất lại; không báo đã xóa thành công khi thao tác thất bại.
+The signed-in Home screen follows the system light/dark theme, with a compact
+initials profile, selectable account values and collapsed **Integration details**
+(local UUID, raw group and developer access). Sign out remains the existing
+session action. Native tab colors and the signed-in status bar match the Home
+palette; Login, Explore content and authentication contracts are unchanged.
 
-App kiểm tra userinfo khi khởi động và khi trở lại foreground. Lỗi mạng/5xx giữ record nhưng ẩn danh tính và cho thử lại. Khi API trả 401, các request dùng chung một refresh đang chạy; request gốc chỉ retry một lần. Token mới được kiểm tra qua userinfo, phải giữ UUID rồi mới lưu cả cặp thay thế. Lỗi refresh, đổi danh tính, lỗi ghi SecureStore hoặc 401 sau retry kết thúc phiên. Response cũ không thể khôi phục phiên sau logout.
+Native tabs handle the bottom safe area; Home adds Android top/side insets and
+uses automatic scroll insets on iOS. Large system text or narrow screens stack
+the profile vertically. Missing profile values display an em dash.
 
-Không áp giới hạn phiên 5 phút của `oauth-example`, không lập lịch từ `expires_in: 300` cố định của backend. Backend quyết định hiệu lực token/session; app không có timer kiểm tra liên tục khi người dùng để màn hình mở. Request được bảo vệ mới phải đi qua `AuthSession.authorized()` để dùng cơ chế 401/refresh.
-
-Logout chặn thao tác mới, chờ refresh đang chạy và gọi backend bằng refresh token mới nhất còn biết. Local state và SecureStore được xóa dù request logout thất bại; UI thông báo nếu không xác nhận được thu hồi server. Thao tác này không đăng xuất cookie SSO trong browser và không thu hồi ngay access JWT đã cấp.
-
-## Giới hạn tương thích backend
-
-- Token OAuth hiện không có `iss` hoặc `token_use`; access token từ `/auth/refresh` không có audience. App dựa vào userinfo được backend xác thực, không thêm kiểm tra claim trái với hợp đồng hiện tại và không tuyên bố OIDC conformance.
-- Backend rotation chưa có transaction/concurrency lock. App giảm cạnh tranh trong một instance bằng một promise refresh; không sửa được cạnh tranh giữa thiết bị/process. Mất response có thể khiến app không biết token thay thế, nên phải đăng nhập lại.
-- Session tạo từ OAuth không chứa Odoo token. Luồng này không cung cấp quyền truy cập HRM cần Odoo token; không có tính năng HRM mới.
-- Khi kiểm tra nhiều tài khoản thật, đặt `MOCKUP_MODE=false` ở backend. Mockup mode có thể trả nhân viên cố định sau login Odoo.
-
-## Kiểm tra
+Manual visual acceptance: check Android/iOS in both themes at approximately
+320/390/430 logical-pixel widths, including long names/emails, empty values,
+expanded UUID, 200% text size, screen-reader disclosure state, tab switching and
+sign-out. Use fictional profiles; do not capture real account data for fixtures.
 
 ```powershell
 npm run typecheck
 npm test
-$env:EXPO_NO_DOTENV='1'
-$env:CI='1'
-npx expo export --platform android --platform ios --output-dir dist-auth-check
+git diff --check
 ```
 
-Tests dùng Node test runner + tsx và dependency injection cho HTTP, storage, browser, random/clock. Không liên hệ PostgreSQL/Odoo hoặc sửa dữ liệu backend. `npm run lint` vẫn là Expo lint chưa có cấu hình ESLint đầy đủ; không dùng như gate đã xác nhận. Không chạy `reset-project` để cập nhật app: đó là script xóa/move starter project.
+Tests use injected HTTP/browser/storage/clock and a fake B. They do not load `.env`, contact Rita ID, or prove B's token validation/rotation or browser compatibility. No dependency upgrade or database migration is needed.
 
-Smoke test trên thiết bị/bản build native: login → consent → đúng profile → restart → access token hết hạn → refresh → logout → tài khoản khác; thêm hủy browser, từ chối consent, mất mạng và foreground. Cần backend/portal/client/account phù hợp. Không coi unit tests hoặc export là bằng chứng smoke test đã đạt.
+Export with fictional release origins, without local `.env`:
 
-## Trạng thái kiểm chứng — 2026-10-14
+```powershell
+$env:EXPO_NO_DOTENV='1'
+$env:CI='1'
+$env:EXPO_PUBLIC_RITA_BASE_URL='https://id.example.invalid'
+$env:EXPO_PUBLIC_APP_BACKEND_BASE_URL='https://app.example.invalid'
+$env:EXPO_PUBLIC_OAUTH_CLIENT_ID='fictional-mobile-client'
+$env:EXPO_PUBLIC_OAUTH_REDIRECT_URI='rita-id-app://redirect'
+node node_modules/expo/bin/cli export --platform android --platform ios --output-dir dist-auth-check --max-workers 2
+```
 
-Baseline trước triển khai: TypeScript lỗi ở hai chỗ `StyleSheet.absoluteFillObject`; chưa có test script. Hai chỗ này đã chuyển sang `StyleSheet.absoluteFill` của React Native đang cài. Các thay đổi chưa commit trong auth context và màn hình được giữ về bố cục/import, rồi cập nhật hành vi theo kế hoạch này.
+Run these environment assignments in a dedicated shell; they override only that process/session. Exports validate bundling, not installed-device behavior. Expo lint has no established project gate here; do not use `reset-project` as a migration command.
 
-Kiểm chứng trên commit nền `ea619e0` cộng working tree chưa commit (bao gồm thay đổi có sẵn và triển khai này):
+## Current verification status
 
-| Kiểm tra | Kết quả |
+Documentation maintenance on **2026-10-23**, against revision `a874e33` plus the existing uncommitted mobile working tree. This task changes only README, ARCHITECTURE and AGENTS; sibling B was inspected read-only.
+
+- Source inspection: configuration, package commands, UI/session/adapters and existing tests were checked; B's mobile routes and profile template exist. This is not a live integration result.
+- Local Markdown links and heading anchors: passed, 34 references across all three files, using a read-only Node check.
+- Documented npm commands: 16 occurrences matched the owning project's package scripts; referenced local command/setup paths exist. Commands were inspected, not executed as runtime checks.
+- `git diff --check`: passed before and after edits with LF/CRLF conversion warnings. The new untracked documents were also checked directly for whitespace errors.
+- SHA-256 comparison of tracked and non-ignored untracked files outside the three-document scope: unchanged from the start of this task.
+- Typecheck, tests, Expo export, native builds/devices, real Rita ID/HRM and browser flows were not rerun for this documentation-only change. Historical test counts below are not new results.
+
+### Historical verification snapshots
+
+The following records are preserved from earlier work. References to phase 2 being future work describe the state at that time, not the current B implementation.
+
+Home presentation verification on **2026-10-23**, against the existing uncommitted
+mobile working tree plus Home, palette, native-tab and signed-in status-bar changes:
+
+- `npm run typecheck`: passed for application and tests.
+- `npm test`: passed 52/52, zero failures/skips, using existing mocked session and
+  transport suites. The initial sandbox run failed to spawn test processes
+  (`EPERM`); the permitted rerun passed.
+- `git diff --check`: passed, with LF/CRLF conversion warnings.
+- Calculated sRGB contrast for main/secondary/brand text against screen, card and
+  accent backgrounds: minimum 5.20:1 in light mode and 5.91:1 in dark mode.
+- Native visual screenshots, 200% text, TalkBack/VoiceOver and live sign-out were
+  not executed. An Android emulator was detected, but no fictional-profile UI
+  harness was configured. iOS device validation was not performed on this Windows
+  host. The existing mock tests do not establish UI rendering or native inset behavior.
+
+The following phase-1 results predate the Home presentation changes; exports were
+not rerun for this UI change.
+
+Phase-1 verification on **2026-10-23**, against revision `a874e33` plus this uncommitted mobile-only working tree (auth/services, UI session actions, tests and documentation):
+
+| Check | Result |
 | --- | --- |
-| `npm run typecheck` | Đạt cho app và test TypeScript |
-| `npm test` | Đạt 27/27 tests |
-| Expo export Android/iOS, `EXPO_NO_DOTENV=1`, `CI=1`, `--max-workers 2` | Đạt, 1625 module Android và 1535 module iOS; artifact ở `dist-auth-check/`, được Git ignore |
-| `git diff --check` | Đạt; chỉ có cảnh báo Git chuyển LF/CRLF |
-| Manifest/lockfile | dependencies và devDependencies khớp |
+| `npm run typecheck` | Passed for application and test TypeScript. |
+| `npm test` | Passed 52/52; no failures or skipped tests. HTTP/browser/storage/B are mocked. |
+| Android/iOS Expo export | Passed with fictional HTTPS origins and `EXPO_NO_DOTENV=1`; 1626 Android and 1536 iOS modules. Ignored output: `dist-auth-check/`. |
+| `git diff --check` | Passed; Git emitted LF/CRLF conversion warnings only. |
+| Local Markdown file links | Passed for README, contract and historical README. |
 
-Sandbox ban đầu chặn npm network cache và Node test workers; cài test dependencies, chạy tests và export bằng quyền mở rộng đã thành công. Metro có cảnh báo `NO_COLOR`/`FORCE_COLOR`, không làm thất bại export. Không đọc `.env` trong export.
+Initial sandbox test/export attempts failed with subprocess `spawn EPERM`; permitted reruns passed. Metro emitted non-failing NO_COLOR/FORCE_COLOR warnings. No dependencies, lockfile, local `.env`, native scheme or sibling source were changed. Live B endpoints, native build/install/callback, real Rita ID/HRM and browser example verification remain untested and outside this phase. B's validation, persistence, idempotency and refresh implementation must be verified in phase 2.
 
-Chưa chạy native Android/iOS build hoặc smoke test với backend/portal/Odoo; không chạy migration. Thêm `tsx` và kiểu Node cho tests, không nâng cấp Expo/React Native. npm báo 29 dependency advisories khi cài (11 moderate, 18 high); không chạy `audit fix` hoặc nâng cấp ngoài phạm vi.
+## Phase-2 acceptance checklist
+
+This section retains its original anchor; it is now the live integration acceptance checklist. With B's mobile profile enabled, register the public client and device-reachable origins; test login/consent/callback/handoff, restart A, private request, expired Rita access token refreshed by B, logout and another account. Also test lost handoff response, refused consent, foreground without network, invalid X, permission denial, B restart and session expiration.
+
+B must preserve its existing browser routes/cookies/CSRF flow and test it separately. A successful mobile mock suite does not establish those properties.
+
+B provides `npm run test:mobile-compat` from its own root. It exercises A's adapter against local B and a fictional provider, not the native UI or real Rita ID. Consult [B's verification guidance](../oauth02-web-integration-example/docs/mobile-backend.md#validation-and-live-acceptance) for that separate check; it was not run for this documentation update.
+
+## Historical documentation
+
+The [pre-phase-1 README](docs/history/README-before-backend-session.md) preserves dated checks and former direct-token instructions. Its refresh/logout, storage and configuration guidance is obsolete for the current implementation and is retained only as history.

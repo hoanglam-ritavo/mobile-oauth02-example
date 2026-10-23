@@ -8,7 +8,7 @@ import { useTheme } from '@/hooks/use-theme';
 import { Spacing } from '@/constants/theme';
 
 export default function LoginScreen() {
-  const { login, isLoading, error } = useAuth();
+  const { login, logout, retry, status, supported, configured, isLoading, error } = useAuth();
   const theme = useTheme();
 
   return (
@@ -44,8 +44,8 @@ export default function LoginScreen() {
           )}
 
           <Pressable
-            onPress={login}
-            disabled={isLoading}
+            onPress={status === 'unverified' ? retry : status === 'error' && configured ? logout : login}
+            disabled={isLoading || !supported || !configured}
             style={({ pressed }) => [
               styles.loginButton,
               { backgroundColor: '#2563eb' },
@@ -57,10 +57,15 @@ export default function LoginScreen() {
               <ActivityIndicator color="#ffffff" />
             ) : (
               <ThemedText style={styles.loginButtonText}>
-                Sign In with Rita ID
+                {status === 'unverified' ? 'Retry session verification' : status === 'error' && configured ? 'Retry sign-out' : 'Sign In with Rita ID'}
               </ThemedText>
             )}
           </Pressable>
+          {status === 'unverified' && (
+            <Pressable onPress={logout} disabled={isLoading}>
+              <ThemedText type="small">Sign out on this device</ThemedText>
+            </Pressable>
+          )}
         </View>
 
         <View style={styles.footer}>

@@ -1,116 +1,85 @@
-import * as Crypto from 'expo-crypto';
-import * as SecureStore from 'expo-secure-store';
-import { OAUTH_CONFIG } from '../constants/config';
+import type { AuthConfig } from '../constants/config';
 
-const ACCESS_TOKEN_KEY = 'oauth_access_token';
-const REFRESH_TOKEN_KEY = 'oauth_refresh_token';
-
-// 1. Generate random verifier string
-export function generateRandomString(length: number): string {
-  const bytes = Crypto.getRandomBytes(length);
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
-  let result = '';
-  for (let i = 0; i < length; i++) {
-    result += chars.charAt(bytes[i] % chars.length);
-  }
-  return result;
-}
-
-// 2. Generate SHA-256 challenge (Base64Url encoded)
-export async function generateCodeChallenge(verifier: string): Promise<string> {
-  const digest = await Crypto.digestStringAsync(
-    Crypto.CryptoDigestAlgorithm.SHA256,
-    verifier,
-    { encoding: Crypto.CryptoEncoding.BASE64 }
-  );
-  
-  // Convert standard base64 to base64url format
-  return digest
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
-}
-
-// 3. Exchange Authorization Code for Tokens
-export interface TokenResponse {
-  access_token: string;
-  refresh_token?: string;
-  token_type: string;
-  expires_in: number;
-  id_token?: string;
-}
-
-export async function exchangeCodeForTokens(
-  code: string,
-  codeVerifier: string
-): Promise<TokenResponse> {
-  const response = await fetch(OAUTH_CONFIG.tokenUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      grant_type: 'authorization_code',
-      client_id: OAUTH_CONFIG.clientId,
-      code,
-      redirect_uri: OAUTH_CONFIG.redirectUri,
-      code_verifier: codeVerifier,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    let errorMessage = 'Failed to exchange authorization code';
-    try {
-      const errorJson = JSON.parse(errorText);
-      errorMessage = errorJson.message || errorMessage;
-    } catch (_) {}
-    throw new Error(errorMessage);
-  }
-
-  return response.json();
-}
-
-// 4. Fetch User Profile
 export interface UserProfile {
-  sub: number;
+  _id: string;
   name: string;
   email: string;
-  employee_id?: string;
-  phone_number?: string;
+  employee_id: string | null;
+  phone_number: string | null;
+  is_developer: boolean;
+  groups: 'EMPLOYEE' | 'CUSTOMER' | 'ENTERPRISE';
+}
+export interface Tokens { accessToken: string; refreshToken: string }
+export class ApiError extends Error {
+  constructor(public readonly status: number) { super('Rita ID request failed.'); }
+}
+export class ContractError extends Error {
+  constructor() { super('Invalid Rita ID response.'); }
+}
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+export const isToken = (value: unknown): value is string =>
+  typeof value === 'string' && value.trim().length > 0;
+export const isUuid = (value: unknown): value is string =>
+  typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+
+export function parseProfile(data: unknown): UserProfile {
+  if (!isRecord(data) || !isUuid(data._id) || typeof data.name !== 'string' ||
+      typeof data.email !== 'string' || typeof data.is_developer !== 'boolean' ||
+      (data.employee_id !== null && typeof data.employee_id !== 'string') ||
+      (data.phone_number !== null && typeof data.phone_number !== 'string') ||
+      (data.groups !== 'EMPLOYEE' && data.groups !== 'CUSTOMER' && data.groups !== 'ENTERPRISE')) {
+    throw new ContractError();
+  }
+  return {
+    _id: data._id, name: data.name, email: data.email,
+    employee_id: data.employee_id, phone_number: data.phone_number,
+    is_developer: data.is_developer, groups: data.groups,
+  };
 }
 
-export async function fetchUserProfile(accessToken: string): Promise<UserProfile> {
-  const response = await fetch(OAUTH_CONFIG.userInfoUrl, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
+export function createAuthApi(config: AuthConfig, request: typeof fetch = fetch, timeoutMs = 10_000) {
+  async function json(path: string, init: RequestInit = {}): Promise<unknown> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await request(config.apiUrl + path, {
+        ...init, credentials: 'omit', redirect: 'error', signal: controller.signal,
+        headers: { Accept: 'application/json', ...init.headers },
+      });
+      if (!response.ok) throw new ApiError(response.status);
+      try { return await response.json(); } catch { throw new ContractError(); }
+    } finally { clearTimeout(timer); }
+  }
+  const post = (path: string, body: unknown) => json(path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
-
-  if (!response.ok) {
-    throw new Error('Failed to fetch user profile');
-  }
-
-  return response.json();
+  return {
+    async exchange(code: string, verifier: string): Promise<Tokens> {
+      const data = await post('/auth/oauth/token', {
+        grant_type: 'authorization_code', client_id: config.clientId,
+        redirect_uri: config.redirectUri, code, code_verifier: verifier,
+      });
+      if (!isRecord(data) || data.token_type !== 'Bearer' || !isToken(data.access_token) ||
+          !isToken(data.refresh_token) || typeof data.expires_in !== 'number' ||
+          !Number.isFinite(data.expires_in) || data.expires_in <= 0) throw new ContractError();
+      return { accessToken: data.access_token, refreshToken: data.refresh_token };
+    },
+    async profile(accessToken: string) {
+      return parseProfile(await json('/auth/oauth/userinfo', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }));
+    },
+    async refresh(refreshToken: string): Promise<Tokens> {
+      const data = await post('/auth/refresh', { refreshToken });
+      if (!isRecord(data) || data.success !== true || !isToken(data.accessToken) ||
+          !isToken(data.refreshToken)) throw new ContractError();
+      return { accessToken: data.accessToken, refreshToken: data.refreshToken };
+    },
+    async logout(refreshToken: string) {
+      const data = await post('/auth/logout', { refreshToken });
+      if (!isRecord(data) || data.success !== true) throw new ContractError();
+    },
+  };
 }
-
-// 5. Secure Token Storage Helper
-export async function saveTokens(accessToken: string, refreshToken?: string): Promise<void> {
-  await SecureStore.setItemAsync(ACCESS_TOKEN_KEY, accessToken);
-  if (refreshToken) {
-    await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refreshToken);
-  }
-}
-
-export async function getAccessToken(): Promise<string | null> {
-  return SecureStore.getItemAsync(ACCESS_TOKEN_KEY);
-}
-
-export async function getRefreshToken(): Promise<string | null> {
-  return SecureStore.getItemAsync(REFRESH_TOKEN_KEY);
-}
-
-export async function clearTokens(): Promise<void> {
-  await SecureStore.deleteItemAsync(ACCESS_TOKEN_KEY);
-  await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
-}
+export type AuthApi = ReturnType<typeof createAuthApi>;

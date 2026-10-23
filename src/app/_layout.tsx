@@ -1,11 +1,20 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import React from 'react';
-import { useColorScheme, ActivityIndicator, View, StyleSheet } from 'react-native';
+import {
+  DarkTheme,
+  DefaultTheme,
+  ThemeProvider,
+} from "expo-router/react-navigation";
+import React from "react";
+import {
+  useColorScheme,
+  ActivityIndicator,
+  View,
+  StyleSheet,
+} from "react-native";
 
-import { AnimatedSplashOverlay } from '@/components/animated-icon';
-import AppTabs from '@/components/app-tabs';
-import { AuthProvider, useAuth } from '../context/auth-context';
-import LoginScreen from './login';
+import { AnimatedSplashOverlay } from "@/components/animated-icon";
+import AppTabs from "@/components/app-tabs";
+import { AuthProvider, useAuth } from "../context/auth-context";
+import LoginScreen from "./login";
 
 function AppContent() {
   const { user, isLoading } = useAuth();
@@ -32,7 +41,7 @@ export default function TabLayout() {
   const colorScheme = useColorScheme();
   return (
     <AuthProvider>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+      <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
         <AppContent />
       </ThemeProvider>
     </AuthProvider>
@@ -41,10 +50,10 @@ export default function TabLayout() {
 
 const styles = StyleSheet.create({
   loadingContainer: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#09090b',
+    ...StyleSheet.absoluteFill,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#09090b",
     zIndex: 99,
   },
 });

@@ -1,10 +1,21 @@
-import type { AuthConfig } from '../constants/config';
-import { ApiError, ContractError, type AuthApi, type UserProfile } from './auth-service';
-import { authorizeUrl, consumeCallback, LoginError } from './oauth-flow';
-import type { SessionStorage, StoredSession } from './session-storage';
+import type { AuthConfig } from "../constants/config";
+import {
+  ApiError,
+  ContractError,
+  type AuthApi,
+  type UserProfile,
+} from "./auth-service";
+import { authorizeUrl, consumeCallback, LoginError } from "./oauth-flow";
+import type { SessionStorage, StoredSession } from "./session-storage";
 
 export interface AuthState {
-  status: 'signedOut' | 'loading' | 'authenticated' | 'unverified' | 'cancelled' | 'error';
+  status:
+    | "signedOut"
+    | "loading"
+    | "authenticated"
+    | "unverified"
+    | "cancelled"
+    | "error";
   user: UserProfile | null;
   error: string | null;
 }
@@ -14,13 +25,16 @@ export interface AuthDependencies {
   storage: SessionStorage;
   random: () => string;
   challenge: (verifier: string) => Promise<string>;
-  browser: (url: string, redirect: string) => Promise<{ type: string; url?: string }>;
+  browser: (
+    url: string,
+    redirect: string,
+  ) => Promise<{ type: string; url?: string }>;
   now?: () => number;
 }
 class Superseded extends Error {}
 
 export class AuthSession {
-  state: AuthState = { status: 'signedOut', user: null, error: null };
+  state: AuthState = { status: "signedOut", user: null, error: null };
   private listeners = new Set<(state: AuthState) => void>();
   private session: StoredSession | null = null;
   private loaded = false;
@@ -36,11 +50,17 @@ export class AuthSession {
 
   subscribe(listener: (state: AuthState) => void) {
     this.listeners.add(listener);
-    return () => { this.listeners.delete(listener); };
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
-  private emit(status: AuthState['status'], user: UserProfile | null = null, error: string | null = null) {
+  private emit(
+    status: AuthState["status"],
+    user: UserProfile | null = null,
+    error: string | null = null,
+  ) {
     this.state = { status, user, error };
-    this.listeners.forEach(listener => listener(this.state));
+    this.listeners.forEach((listener) => listener(this.state));
   }
   private current(epoch: number) {
     if (this.blocked || epoch !== this.epoch) throw new Superseded();
@@ -60,10 +80,14 @@ export class AuthSession {
       await this.enqueue(() => this.deps.storage.clear());
       if (epoch !== this.epoch) return;
       this.blocked = false;
-      this.emit('signedOut', null, message);
+      this.emit("signedOut", null, message);
     } catch {
       if (epoch !== this.epoch) return;
-      this.emit('error', null, 'Unable to clear secure storage. Retry sign-out before signing in.');
+      this.emit(
+        "error",
+        null,
+        "Unable to clear secure storage. Retry sign-out before signing in.",
+      );
       // Do not reload residual credentials in this process.
       this.blocked = true;
     }
@@ -78,44 +102,73 @@ export class AuthSession {
     this.session = value;
     this.latestRefresh = value.refreshToken;
     this.loaded = true;
-    this.emit('authenticated', user);
+    this.emit("authenticated", user);
   }
 
   login = async (): Promise<void> => {
-    if (this.blocked || this.loginPending || this.verification || this.rotation) return;
+    if (this.blocked || this.loginPending || this.verification || this.rotation)
+      return;
     this.loginPending = true;
     const epoch = ++this.epoch;
-    this.emit('loading');
+    this.emit("loading");
     try {
+      console.log("step 1");
       // A new account must never inherit an older account's credentials.
       await this.enqueue(() => this.deps.storage.clear());
       this.current(epoch);
       this.session = null;
       this.latestRefresh = undefined;
       this.loaded = true;
+      console.log("step 2");
       const pending = {
-        state: this.deps.random(), verifier: this.deps.random(),
-        expiresAt: (this.deps.now ?? Date.now)() + 600_000, used: false,
+        state: this.deps.random(),
+        verifier: this.deps.random(),
+        expiresAt: (this.deps.now ?? Date.now)() + 600_000,
+        used: false,
       };
       const challenge = await this.deps.challenge(pending.verifier);
       this.current(epoch);
       const result = await this.deps.browser(
-        authorizeUrl(this.deps.config, pending.state, challenge), this.deps.config.redirectUri,
+        authorizeUrl(this.deps.config, pending.state, challenge),
+        this.deps.config.redirectUri,
       );
+      console.log("step 3");
       this.current(epoch);
-      if (result.type !== 'success') {
-        this.emit('cancelled', null, 'Sign-in was cancelled.');
+      if (result.type !== "success") {
+        this.emit("cancelled", null, "Sign-in was cancelled.");
         return;
       }
-      const code = consumeCallback(result.url ?? '', this.deps.config.redirectUri, pending, (this.deps.now ?? Date.now)());
+      const code = consumeCallback(
+        result.url ?? "",
+        this.deps.config.redirectUri,
+        pending,
+        (this.deps.now ?? Date.now)(),
+      );
+      console.log("step 4");
       const tokens = await this.deps.api.exchange(code, pending.verifier);
+      console.log("step 5");
       this.current(epoch);
+      console.log("step 6");
       const user = await this.deps.api.profile(tokens.accessToken);
-      await this.commit({ version: 1, ...tokens, userId: user._id }, user, epoch);
+      console.log("step 7");
+      await this.commit(
+        { version: 1, ...tokens, userId: user._id },
+        user,
+        epoch,
+      );
+      console.log("step 8");
     } catch (error) {
       if (error instanceof Superseded || epoch !== this.epoch) return;
-      await this.discard(error instanceof LoginError ? error.message : 'Unable to sign in. Please try again.');
-    } finally { this.loginPending = false; }
+      console.log("error.status : ", error.status);
+      console.log("error : ", error);
+      await this.discard(
+        error instanceof LoginError
+          ? error.message
+          : "Unable to sign in. Please try again.",
+      );
+    } finally {
+      this.loginPending = false;
+    }
   };
 
   private refresh(epoch: number): Promise<void> {
@@ -131,19 +184,27 @@ export class AuthSession {
         this.current(epoch);
         const user = await this.deps.api.profile(tokens.accessToken);
         if (user._id !== old.userId) throw new ContractError();
-        await this.commit({ version: 1, ...tokens, userId: old.userId }, user, epoch);
+        await this.commit(
+          { version: 1, ...tokens, userId: old.userId },
+          user,
+          epoch,
+        );
       } catch (error) {
         if (!(error instanceof Superseded) && epoch === this.epoch) {
-          await this.discard('Session ended. Please sign in again.');
+          await this.discard("Session ended. Please sign in again.");
         }
         throw error;
       }
-    })().finally(() => { this.rotation = undefined; });
+    })().finally(() => {
+      this.rotation = undefined;
+    });
     return this.rotation;
   }
 
   // Consumers use this for protected API calls; the operation is retried only after a 401.
-  async authorized<T>(operation: (accessToken: string) => Promise<T>): Promise<T> {
+  async authorized<T>(
+    operation: (accessToken: string) => Promise<T>,
+  ): Promise<T> {
     const epoch = this.epoch;
     this.current(epoch);
     if (this.loginPending) throw new Superseded();
@@ -168,10 +229,17 @@ export class AuthSession {
       return result;
     } catch (error) {
       if (epoch === this.epoch && !(error instanceof Superseded)) {
-        if ((error instanceof ApiError && error.status === 401) || error instanceof ContractError) {
-          await this.discard('Session ended. Please sign in again.');
+        if (
+          (error instanceof ApiError && error.status === 401) ||
+          error instanceof ContractError
+        ) {
+          await this.discard("Session ended. Please sign in again.");
         } else {
-          this.emit('unverified', null, 'Unable to verify your session. Check your connection and retry.');
+          this.emit(
+            "unverified",
+            null,
+            "Unable to verify your session. Check your connection and retry.",
+          );
         }
       }
       throw error;
@@ -182,7 +250,7 @@ export class AuthSession {
     if (this.blocked || this.loginPending) return Promise.resolve();
     if (this.verification) return this.verification;
     const epoch = this.epoch;
-    this.emit('loading');
+    this.emit("loading");
     this.verification = (async () => {
       try {
         if (!this.loaded) {
@@ -192,21 +260,32 @@ export class AuthSession {
           this.latestRefresh = stored?.refreshToken;
           this.loaded = true;
         }
-        if (!this.session) { this.emit('signedOut'); return; }
+        if (!this.session) {
+          this.emit("signedOut");
+          return;
+        }
         const userId = this.session.userId;
-        const user = await this.authorized(token => this.deps.api.profile(token));
+        const user = await this.authorized((token) =>
+          this.deps.api.profile(token),
+        );
         this.current(epoch);
         if (user._id !== userId) throw new ContractError();
-        this.emit('authenticated', user);
+        this.emit("authenticated", user);
       } catch (error) {
         if (epoch !== this.epoch || error instanceof Superseded) return;
         if (error instanceof ContractError) {
-          await this.discard('Session ended. Please sign in again.');
+          await this.discard("Session ended. Please sign in again.");
         } else {
-          this.emit('unverified', null, 'Unable to verify your session. Check your connection and retry.');
+          this.emit(
+            "unverified",
+            null,
+            "Unable to verify your session. Check your connection and retry.",
+          );
         }
       }
-    })().finally(() => { this.verification = undefined; });
+    })().finally(() => {
+      this.verification = undefined;
+    });
     return this.verification;
   };
 
@@ -214,24 +293,38 @@ export class AuthSession {
     if (this.signingOut) return this.signingOut;
     this.blocked = true;
     ++this.epoch;
-    this.emit('loading');
+    this.emit("loading");
     this.signingOut = (async () => {
       let remoteFailed = false;
       try {
         await this.rotation?.catch(() => undefined);
         if (this.latestRefresh) await this.deps.api.logout(this.latestRefresh);
-      } catch { remoteFailed = true; }
+      } catch {
+        remoteFailed = true;
+      }
       this.session = null;
       this.latestRefresh = undefined;
       this.loaded = true;
       try {
         await this.enqueue(() => this.deps.storage.clear());
         this.blocked = false;
-        this.emit('signedOut', null, remoteFailed ? 'Signed out on this device. Rita ID session revocation could not be confirmed.' : null);
+        this.emit(
+          "signedOut",
+          null,
+          remoteFailed
+            ? "Signed out on this device. Rita ID session revocation could not be confirmed."
+            : null,
+        );
       } catch {
-        this.emit('error', null, 'Unable to clear secure storage. Retry sign-out before signing in.');
+        this.emit(
+          "error",
+          null,
+          "Unable to clear secure storage. Retry sign-out before signing in.",
+        );
       }
-    })().finally(() => { this.signingOut = undefined; });
+    })().finally(() => {
+      this.signingOut = undefined;
+    });
     return this.signingOut;
   };
 }

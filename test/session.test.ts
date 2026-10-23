@@ -21,7 +21,7 @@ function setup(stored: StoredSession | null = { ...original }) {
   let time = 0;
   const calls = { refresh: 0, profile: [] as string[], logout: [] as string[], exchange: 0, browser: 0, writes: 0 };
   const deps: AuthDependencies = {
-    config: { apiUrl: 'http://api.test', portalUrl: 'http://portal.test', clientId: 'client', redirectUri: 'ritaidapp://redirect' },
+    config: { apiUrl: 'http://portal.test/api', portalUrl: 'http://portal.test', clientId: 'client', redirectUri: 'rita-id-app://redirect' },
     storage: {
       load: async () => value,
       save: async session => { calls.writes++; value = session; },
@@ -36,7 +36,7 @@ function setup(stored: StoredSession | null = { ...original }) {
     random: () => 'a'.repeat(64), challenge: async () => 'challenge', now: () => time,
     browser: async url => {
       calls.browser++;
-      return { type: 'success', url: 'ritaidapp://redirect?code=code&state=' + new URL(url).searchParams.get('state') };
+      return { type: 'success', url: 'rita-id-app://redirect?code=code&state=' + new URL(url).searchParams.get('state') };
     },
   };
   return { deps, calls, manager: new AuthSession(deps), value: () => value, advance: (ms: number) => { time += ms; } };
@@ -153,7 +153,7 @@ test('late browser callback cannot sign in after logout and duplicate login open
   await f.manager.login();
   assert.equal(f.calls.browser, 1);
   await f.manager.logout();
-  gate.resolve({ type: 'success', url: 'ritaidapp://redirect?code=code&state=' + 'a'.repeat(64) });
+  gate.resolve({ type: 'success', url: 'rita-id-app://redirect?code=code&state=' + 'a'.repeat(64) });
   await login;
   assert.equal(f.calls.exchange, 0);
   assert.equal(f.value(), null);

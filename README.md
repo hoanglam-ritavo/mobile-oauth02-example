@@ -2,6 +2,30 @@
 
 Ứng dụng Expo/React Native cho Android và iOS, đăng nhập SSO qua Rita ID Portal bằng Authorization Code + PKCE S256. Backend xác minh access token khi app gọi userinfo. App không nhập mật khẩu Odoo, không nhúng client secret, không xác thực bằng ID token hoặc decode JWT.
 
+## Shared origin configuration - 2026-10-23
+
+Verification: revision `dfb5c41` plus the existing scheme changes and this shared-origin working tree. `npm run typecheck` passed; `npm test` passed **28/28** with mocked HTTP/storage/browser; `git diff --check` passed (line-ending warnings only). The initial sandbox test run was blocked by subprocess `spawn EPERM`; the permitted rerun passed. No native build, live OAuth requests, proxy checks or database changes were performed.
+
+Configure only EXPO_PUBLIC_RITA_BASE_URL for Rita ID routing. For example, https://id.example.com produces portal https://id.example.com/oauth/authorize and API https://id.example.com/api/auth/oauth/token. Every API request retains exactly one /api prefix. The input must not contain /api. Direct backend origins without the /api proxy are no longer supported by this configuration.
+
+Development: use the device-reachable portal origin (for example http://<HOST>:3002). With ENV_MODE=development, the portal Next.js rewrite forwards /api/* to backend /*, removing the prefix. Production: the reverse proxy must provide the equivalent routing; Next.js does not automatically enable that rewrite outside development. No proxy or backend configuration is changed here.
+
+Restart Metro and reload the app after updating environment values. This URL-only change does not require native prebuild or a scheme change. Local .env was migrated using its existing portal origin, preserving client ID, callback and unrelated values. Keep .env uncommitted. Existing scheme changes and their historical checks below are preserved.
+
+The endpoint paths in the contract table below are relative to the derived API base (origin + /api). Refresh and logout still use the old direct-session contract; this change does not fix OAuth refresh/revoke compatibility. Mock verification cannot establish live reverse-proxy routing or device login.
+
+## URL scheme update ? 2026-10-23
+
+The current callback is `rita-id-app://redirect`; the old `ritaidapp://redirect` is rejected. Register the exact new callback on a backend **public** client before testing. The portal currently defaults client creation to confidential, so its existing registration form alone does not provision the required public client. No backend client or database was modified by this change.
+
+`app.json`, runtime configuration, `.env.example`, local `.env`, callback fixtures and the local Android manifest are aligned. Only EXPO_PUBLIC_OAUTH_REDIRECT_URI changed in local `.env`. Android package/applicationId and Kotlin namespaces remain `com.kompact.ritaidapp`. The Android directory and `.env` are Git-ignored: the manifest edit is local and is not included in the tracked diff. Existing native checkouts must align their manifest; future native generation should use the updated app config. No prebuild was run. There is no native iOS directory in this checkout.
+
+Rebuild and reinstall the native app with `npm run android` after connecting a device/emulator; Metro reload alone does not register the new scheme. Verify deep-link opening, login/consent/callback/userinfo and denied consent on a native build, not Expo Go. iOS validation requires a macOS native build and device/simulator.
+
+Executed against revision `dfb5c41` plus this scheme-only working tree: `npm run typecheck` passed; `npm test` passed **27/27**, including acceptance of the new callback and rejection of the old scheme. The first test run was blocked by sandbox subprocess `spawn EPERM`; the permitted rerun passed. `git diff --check` passed with line-ending conversion warnings only. ADB listed no connected devices. Native build/install, Android/iOS callback smoke tests and live backend integration were not run.
+
+This update does not repair the existing refresh/logout mismatch: the mobile adapter still calls direct `/auth/refresh` and `/auth/logout`, while current backend OAuth sessions require `/auth/oauth/token` with the refresh_token grant and `/auth/oauth/revoke`. The older backend compatibility descriptions below reflect the previous integration contract; passing mock tests does not establish compatibility with the current backend or completion of the OAuth session lifecycle.
+
 ## Thiết lập
 
 Dùng Node.js 24 và npm với `package-lock.json`. Không nâng cấp Expo/React Native để xử lý cấu hình OAuth.
@@ -15,10 +39,9 @@ Chỉ copy nếu chưa có `.env`; không ghi đè môi trường hoặc commit 
 
 | Biến | Giá trị |
 | --- | --- |
-| `EXPO_PUBLIC_RITA_API_URL` | Origin backend, ví dụ `http://<HOST>:4000` |
-| `EXPO_PUBLIC_RITA_PORTAL_URL` | Origin portal, ví dụ `http://<HOST>:3002` |
+| `EXPO_PUBLIC_RITA_BASE_URL` | Shared portal origin, e.g. `http://<HOST>:3002`; API base is derived as origin + `/api` |
 | `EXPO_PUBLIC_OAUTH_CLIENT_ID` | Client ID đăng ký trên portal; bắt buộc |
-| `EXPO_PUBLIC_OAUTH_REDIRECT_URI` | `ritaidapp://redirect`; khớp scheme native hiện tại |
+| `EXPO_PUBLIC_OAUTH_REDIRECT_URI` | `rita-id-app://redirect`; khớp scheme native hiện tại |
 
 Thay `<HOST>` bằng host thực. Android emulator thường dùng `10.0.2.2` để truy cập máy host; thiết bị thật dùng IP LAN/domain truy cập được. `localhost` trên điện thoại là chính điện thoại. Backend/portal phải lắng nghe trên địa chỉ phù hợp và portal cần cấu hình API truy cập được từ trình duyệt trên thiết bị. HTTP phục vụ phát triển; môi trường triển khai cần HTTPS. Android debug hiện cho phép cleartext; không mở rộng chính sách release trong thay đổi này.
 
@@ -26,7 +49,7 @@ Không thêm `/api`, path, credentials, query hoặc fragment vào origin. Khôn
 
 Đăng nhập portal bằng tài khoản được phép quản lý developer clients và tạo client:
 
-- Redirect URI chính xác: `ritaidapp://redirect`.
+- Redirect URI chính xác: `rita-id-app://redirect`.
 - Scopes: `openid`, `profile`, `email`.
 - Luồng: `authorization_code` với PKCE S256. Không gửi client secret từ native. Backend hiện cho đổi code có PKCE mà không yêu cầu secret; điều này không chứng minh hỗ trợ đầy đủ public-client/OIDC.
 
@@ -38,7 +61,7 @@ npm run android
 npm run ios
 ```
 
-OAuth cần bản build native có URL scheme `ritaidapp`, không dùng Expo Go để nghiệm thu callback. Xem [hướng dẫn OAuth của Expo](https://docs.expo.dev/guides/authentication/). Scheme đã khai báo trong `app.json` và Android manifest. Không đổi callback độc lập với native registration. iOS cần máy macOS; bundle iOS xuất được trên Windows không có nghĩa native build đã được kiểm chứng.
+OAuth cần bản build native có URL scheme `rita-id-app`, không dùng Expo Go để nghiệm thu callback. Xem [hướng dẫn OAuth của Expo](https://docs.expo.dev/guides/authentication/). Scheme đã khai báo trong `app.json` và Android manifest. Không đổi callback độc lập với native registration. iOS cần máy macOS; bundle iOS xuất được trên Windows không có nghĩa native build đã được kiểm chứng.
 
 `npm start` chạy Metro. `npm run web` chỉ dành cho preview: web hiển thị thông báo đăng nhập chỉ hỗ trợ Android/iOS và không gọi SecureStore hoặc native browser. Không có callback/phiên đăng nhập web trong phạm vi này.
 

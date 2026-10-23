@@ -1,5 +1,5 @@
 {
-  "name": "rita-vo-id-mobile-app",
+  "name": "oauth-02-mobile-integration-example",
   "main": "expo-router/entry",
   "version": "1.0.0",
   "scripts": {

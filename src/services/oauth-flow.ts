@@ -1,36 +1,44 @@
-import type { AuthConfig } from '../constants/config';
+import { RITA_CALLBACK_URI } from "../constants/config";
+import type { LoginAttempt } from "./backend-service";
 
-export class LoginError extends Error {}
-export interface PendingLogin { state: string; verifier: string; expiresAt: number; used: boolean }
-export function authorizeUrl(config: AuthConfig, state: string, challenge: string): string {
-  const url = new URL('/oauth/authorize', config.portalUrl);
-  url.search = new URLSearchParams({
-    client_id: config.clientId, redirect_uri: config.redirectUri,
-    response_type: 'code', scope: 'openid profile email', state,
-    code_challenge: challenge, code_challenge_method: 'S256',
-  }).toString();
-  return url.toString();
+export const isVerifier = (value: unknown): value is string =>
+  typeof value === "string" && /^[A-Za-z0-9._~-]{43,128}$/.test(value);
+
+export function authorizeUrl(entry: string, attempt: LoginAttempt, challenge: string): string {
+  const query = new URLSearchParams({
+    client_id: attempt.clientId, redirect_uri: attempt.redirectUri, scope: attempt.scope,
+    state: attempt.state, response_type: "code", code_challenge: challenge, code_challenge_method: "S256",
+  });
+  return entry + "?" + query.toString();
 }
-export function consumeCallback(value: string, redirectUri: string, pending: PendingLogin, now: number): string {
-  if (pending.used || pending.expiresAt <= now) throw new LoginError('Login expired. Please try again.');
-  pending.used = true;
-  let url: URL;
-  try { url = new URL(value); } catch { throw new LoginError('Invalid login callback.'); }
-  const expected = new URL(redirectUri);
-  if (url.protocol !== expected.protocol || url.host !== expected.host ||
-      url.pathname !== expected.pathname || url.username || url.password || url.hash) {
-    throw new LoginError('Invalid login callback.');
+
+type Callback = { kind: "code"; code: string } | { kind: "cancelled" };
+
+export function readCallback(value: string, state: string): Callback | null {
+  if (!value.startsWith(RITA_CALLBACK_URI + "?") || /[\x00-\x20\x7f#\\]/.test(value) ||
+      /%(?![0-9a-f]{2})/i.test(value)) return null;
+  // The native URLSearchParams implementation exposes unique keys and can throw on invalid UTF-8.
+  const query = new Map<string, string>();
+  try {
+    for (const field of value.slice(RITA_CALLBACK_URI.length + 1).split("&")) {
+      const separator = field.indexOf("=");
+      if (separator <= 0) return null;
+      const key = decodeURIComponent(field.slice(0, separator).replace(/\+/g, " "));
+      const content = decodeURIComponent(field.slice(separator + 1).replace(/\+/g, " "));
+      if (query.has(key)) return null;
+      query.set(key, content);
+    }
+  } catch {
+    return null;
   }
-  const seen = new Set<string>();
-  for (const key of url.searchParams.keys()) {
-    if (seen.has(key)) throw new LoginError('Invalid login callback.');
-    seen.add(key);
+  if (query.get("state") !== state) return null;
+  const code = query.get("code");
+  const error = query.get("error");
+  if (error !== undefined) {
+    return code === undefined && /^[a-z_]{1,64}$/.test(error) ? { kind: "cancelled" } : null;
   }
-  if (url.searchParams.get('state') !== pending.state) throw new LoginError('Invalid login state.');
-  if (url.searchParams.has('error')) throw new LoginError('Sign-in was declined or cancelled.');
-  const code = url.searchParams.get('code');
-  if (!code?.trim()) throw new LoginError('Missing authorization code.');
-  return code;
+  return code && /^[\x21-\x7e]{1,512}$/.test(code) ? { kind: "code", code } : null;
 }
-export const base64Url = (value: string) => value.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-export const randomHex = (bytes: Uint8Array) => Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+
+export const base64Url = (value: string) => value.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+export const randomHex = (bytes: Uint8Array) => Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");

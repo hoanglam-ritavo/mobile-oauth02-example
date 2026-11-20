@@ -1,237 +1,405 @@
-﻿import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { AuthSession, type AuthDependencies } from '../src/services/auth-session';
-import { ApiError, ContractError, TransportError } from '../src/services/auth-service';
-import type { Handoff } from '../src/services/backend-service';
-import type { StoredSession } from '../src/services/session-storage';
-import { createNativeAuthSession as webSession } from '../src/services/auth-runtime.web';
-import { config, expiry, user } from './fixtures';
-const original: StoredSession = { version: 2, sessionKey: 'X', userId: user._id, expiresAt: expiry, backendOrigin: config.backendOrigin };
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { test, type TestContext } from "node:test";
+import { ApiError, TransportError } from "../src/services/auth-service";
+import { AuthSession, type AuthDependencies } from "../src/services/auth-session";
+import type { LoginCompletion, SessionGrant } from "../src/services/backend-service";
+import { ATTEMPT_KEY, SESSION_KEY, createSessionStorage } from "../src/services/session-storage";
+import { createNativeAuthSession as webSession } from "../src/services/auth-runtime.web";
+import { attempt, callback, completion, config, grant, now, pending, refreshExpiry, stored, user, verifier } from "./fixtures";
+
 function deferred<T>() {
-  let resolve!: (v: T) => void; let reject!: (e: unknown) => void;
-  const promise = new Promise<T>((a, b) => { resolve = a; reject = b; });
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-function setup(stored: StoredSession | null = null) {
-  let value = stored; let now = Date.parse('2026-10-23T00:00:00Z'); let random = 0;
-  const calls = { exchange: 0, handoffs: [] as Handoff[], logout: [] as string[], me: 0, private: 0, writes: [] as StoredSession[] };
+
+function fixture(context: TestContext, values = new Map<string, string>()) {
+  let clock = now;
+  let onLink: ((url: string) => void) | undefined;
+  const opened: string[] = [];
+  const starts: string[] = [];
+  const completions: LoginCompletion[] = [];
+  const refreshes: string[] = [];
+  const reads: string[] = [];
+  const closed: string[] = [];
+  const requests: string[] = [];
+  const secondGrant = () => ({
+    ...grant, accessToken: "b".repeat(43), refreshToken: "q".repeat(43),
+    accessExpiresAt: new Date(Math.min(clock + 15 * 60_000, Date.parse(refreshExpiry))).toISOString(),
+  });
   const deps: AuthDependencies = {
-    config, now: () => now, random: () => (++random).toString(16).padStart(64, '0'), challenge: async () => 'challenge',
-    browser: async url => ({ type: 'success', url: 'rita-id-app://redirect?code=code&state=' + new URL(url).searchParams.get('state') }),
-    api: { exchange: async () => { calls.exchange++; return { accessToken: 'oauth-a', refreshToken: 'oauth-r' }; } },
-    backend: {
-      handoff: async payload => { calls.handoffs.push({ ...payload }); return { sessionKey: 'X', expiresAt: expiry, profile: user }; },
-      me: async key => { assert.equal(key, 'X'); calls.me++; return { expiresAt: expiry, profile: user }; },
-      logout: async key => { calls.logout.push(key); return true; },
-      privateRequest: async (key, _path, _options) => { assert.equal(key, 'X'); calls.private++; return { ok: true }; },
+    config, now: () => clock, verifier: () => verifier,
+    challenge: async value => createHash("sha256").update(value).digest("base64url"),
+    storage: createSessionStorage({
+      getItemAsync: async key => values.get(key) ?? null,
+      setItemAsync: async (key, value) => { values.set(key, value); },
+      deleteItemAsync: async key => { values.delete(key); },
+    }),
+    links: {
+      open: async value => { opened.push(value); },
+      initial: async () => null,
+      subscribe: receive => { onLink = receive; return () => { onLink = undefined; }; },
     },
-    storage: { load: async () => value, save: async s => { calls.writes.push({ ...s }); value = s; }, clear: async () => { value = null; } },
+    backend: {
+      start: async challenge => {
+        starts.push(challenge);
+        return { ...attempt, expiresAt: new Date(clock + 10 * 60_000).toISOString() };
+      },
+      complete: async payload => { completions.push(payload); return grant; },
+      refresh: async token => { refreshes.push(token); return secondGrant(); },
+      me: async token => { reads.push(token); return user; },
+      logout: async token => { closed.push(token); },
+      privateRequest: async token => { requests.push(token); return { ok: true }; },
+    },
   };
-  return { deps, calls, manager: new AuthSession(deps), value: () => value, advance: (ms: number) => { now += ms; }, now: () => now };
+  const session = new AuthSession(deps);
+  context.after(() => session.logout());
+  return {
+    session, deps, values, opened, starts, completions, refreshes, reads, closed, requests, secondGrant,
+    advance: (ms: number) => { clock += ms; },
+    deliver: (value: string) => onLink?.(value),
+    login: async () => { await session.login(); await session.receiveCallback(callback); },
+  };
 }
-test('login hands off once, publishes B profile, and persists only X metadata', async () => {
-  const f = setup(); await f.manager.login();
-  assert.equal(f.calls.exchange, 1); assert.equal(f.calls.handoffs.length, 1);
-  assert.equal(f.calls.handoffs[0].handoffId.length, 64);
-  assert.deepEqual(f.value(), original);
-  assert.equal(f.manager.state.user?._id, user._id);
-  assert.doesNotMatch(JSON.stringify([f.value(), f.manager.state]), /oauth-a|oauth-r|accessToken|refreshToken/);
-  await f.manager.authorized('/api/mobile/private/example', { method: 'POST' });
-  assert.equal(f.calls.private, 1); await f.manager.logout();
+
+test("persist attempt before opening B; valid callback logs in with only C's refresh token stored", async context => {
+  const f = fixture(context);
+  const open = f.deps.links.open;
+  f.deps.links.open = async value => {
+    assert.deepEqual(JSON.parse(f.values.get(ATTEMPT_KEY)!), pending);
+    return open(value);
+  };
+  await f.session.login();
+  assert.equal(f.session.state.status, "waiting");
+  assert.equal(f.opened.length, 1);
+  assert.equal(f.starts[0], createHash("sha256").update(verifier).digest("base64url"));
+  assert.doesNotMatch(f.opened[0], new RegExp(verifier));
+  await f.session.receiveCallback(callback);
+  assert.deepEqual(f.completions, [completion]);
+  assert.equal(f.session.state.status, "authenticated");
+  assert.deepEqual(f.session.state.user, user);
+  assert.deepEqual(JSON.parse(f.values.get(SESSION_KEY)!), stored);
+  assert.ok(!f.values.has(ATTEMPT_KEY));
+  await f.session.authorized("/api/mobile/me");
+  assert.deepEqual(f.requests, [grant.accessToken]);
 });
-for (const error of [new TransportError(), new ApiError(503), new ApiError(429)]) {
-  test(`handoff manual retry uses identical payload after ${error.constructor.name}/${error instanceof ApiError ? error.status : 'network'}`, async () => {
-    const f = setup(); const handoff = f.deps.backend.handoff;
-    let count = 0; let created = 0; const issued = new Map<string, Awaited<ReturnType<typeof handoff>>>();
-    f.deps.backend.handoff = async payload => {
-      const copy = { ...payload }; f.calls.handoffs.push(copy);
-      if (!issued.has(payload.handoffId)) { created++; issued.set(payload.handoffId, { sessionKey: 'X', expiresAt: expiry, profile: user }); }
-      if (++count === 1) throw error;
-      return issued.get(payload.handoffId)!;
+
+test("wrong state leaves pending attempt intact; concurrent and repeated callbacks complete once", async context => {
+  const f = fixture(context);
+  await Promise.all([f.session.login(), f.session.login()]);
+  assert.equal(f.starts.length, 1);
+  await f.session.receiveCallback(callback.replace(attempt.state, "other"));
+  assert.equal(f.session.state.status, "waiting");
+  assert.ok(f.values.has(ATTEMPT_KEY));
+  await Promise.all([f.session.receiveCallback(callback), f.session.receiveCallback(callback)]);
+  await f.session.receiveCallback(callback);
+  assert.equal(f.completions.length, 1);
+});
+
+test("a cold launch with a pending attempt deduplicates initial URL and warm event", async context => {
+  const f = fixture(context, new Map([[ATTEMPT_KEY, JSON.stringify(pending)]]));
+  const initial = deferred<string>();
+  f.deps.links.initial = () => initial.promise;
+  const disconnect = f.session.connectLinks();
+  f.deliver(callback);
+  initial.resolve(callback);
+  await f.session.verify();
+  await nextTurn();
+  assert.equal(f.session.state.status, "authenticated");
+  assert.equal(f.starts.length, 0);
+  assert.equal(f.completions.length, 1);
+  disconnect();
+});
+
+test("detached native callback listeners do not deliver a late initial URL", async context => {
+  const f = fixture(context, new Map([[ATTEMPT_KEY, JSON.stringify(pending)]]));
+  const initial = deferred<string>();
+  f.deps.links.initial = () => initial.promise;
+  const disconnect = f.session.connectLinks();
+  disconnect();
+  initial.resolve(callback);
+  await f.session.verify();
+  await nextTurn();
+  assert.equal(f.session.state.status, "waiting");
+  assert.equal(f.completions.length, 0);
+});
+
+test("matching denial clears the attempt without contacting C and allows a new login", async context => {
+  const f = fixture(context);
+  await f.session.login();
+  await f.session.receiveCallback(attempt.redirectUri + "?state=" + attempt.state + "&error=access_denied");
+  assert.equal(f.session.state.status, "cancelled");
+  assert.ok(!f.values.has(ATTEMPT_KEY));
+  assert.equal(f.completions.length, 0);
+  await f.session.login();
+  assert.equal(f.session.state.status, "waiting");
+});
+
+test("failed app launch discards the attempt", async context => {
+  const f = fixture(context);
+  f.deps.links.open = async () => { throw new Error("app unavailable"); };
+  await f.session.login();
+  assert.equal(f.session.state.status, "signedOut");
+  assert.match(f.session.state.error!, /Không mở được/);
+  assert.equal(f.completions.length, 0);
+  assert.equal(f.values.size, 0);
+});
+
+for (const patch of [{ backendOrigin: "https://other.example.invalid" }, { expiresAt: new Date(now).toISOString() }]) {
+  test("cold callback cannot use an expired or foreign-origin record " + Object.keys(patch)[0], async context => {
+    const f = fixture(context, new Map([[ATTEMPT_KEY, JSON.stringify({ ...pending, ...patch })]]));
+    await f.session.receiveCallback(callback);
+    assert.equal(f.session.state.status, "signedOut");
+    assert.equal(f.completions.length, 0);
+    assert.equal(f.values.size, 0);
+  });
+}
+
+test("OS restart after callback processing cannot resume an in-memory completion", async context => {
+  const f = fixture(context);
+  f.deps.backend.complete = async () => { throw new TransportError(); };
+  await f.login();
+  assert.equal(f.session.state.status, "handoff");
+  assert.equal(f.values.size, 0);
+  const restarted = fixture(context, f.values);
+  await restarted.session.receiveCallback(callback);
+  assert.equal(restarted.session.state.status, "signedOut");
+  assert.equal(restarted.completions.length, 0);
+});
+
+for (const error of [new TransportError(), new ApiError(503, now + 15_000, "CAPACITY_EXCEEDED")]) {
+  test("explicit retry sends identical completion after " + error.constructor.name, async context => {
+    const f = fixture(context);
+    const requests: LoginCompletion[] = [];
+    f.deps.backend.complete = async value => {
+      requests.push(value);
+      if (requests.length === 1) throw error;
+      return grant;
     };
-    await f.manager.login(); assert.equal(f.manager.state.status, 'handoff'); assert.equal(f.value(), null);
-    assert.equal(count, 1); await f.manager.verify(); assert.equal(count, 1);
-    await f.manager.retry(); assert.equal(created, 1); assert.equal(f.calls.exchange, 1);
-    assert.deepEqual(f.calls.handoffs[0], f.calls.handoffs[1]);
-    assert.equal(f.manager.state.status, 'authenticated'); await f.manager.logout();
+    await f.login();
+    assert.equal(f.session.state.status, "handoff");
+    await f.session.verify();
+    assert.equal(requests.length, 1);
+    if (error instanceof ApiError) {
+      await f.session.retry();
+      assert.equal(requests.length, 1);
+      f.advance(15_000);
+    }
+    await f.session.retry();
+    assert.deepEqual(requests, [completion, completion]);
+    assert.equal(f.session.state.status, "authenticated");
   });
 }
-test('Retry-After enforced, deadline never extended by retry', async () => {
-  const f = setup(); let attempts = 0;
-  f.deps.backend.handoff = async () => { attempts++; throw new ApiError(429, f.now() + 30_000); };
-  await f.manager.login(); await f.manager.retry(); assert.equal(attempts, 1);
-  f.advance(30_000); await f.manager.retry(); assert.equal(attempts, 2);
-  f.advance(90_000); await f.manager.retry(); assert.equal(attempts, 2);
-  assert.equal(f.manager.state.status, 'signedOut');
+
+test("login retry deadline is fixed even if Retry-After exceeds the remaining window", async context => {
+  const f = fixture(context);
+  let calls = 0;
+  f.deps.backend.complete = async () => { calls++; throw new ApiError(503, 1e30, "CAPACITY_EXCEEDED"); };
+  await f.login();
+  f.advance(59_999);
+  await f.session.retry();
+  assert.equal(calls, 1);
+  f.advance(1);
+  await f.session.retry();
+  assert.equal(calls, 1);
+  assert.equal(f.session.state.status, "signedOut");
 });
-test('timer drops handoff credentials without user interaction', async context => {
-  context.mock.timers.enable({ apis: ['setTimeout'] });
-  const f = setup(); let retained: Handoff | undefined;
-  f.deps.backend.handoff = async payload => { retained = payload; throw new TransportError(); };
-  await f.manager.login(); f.advance(120_000); context.mock.timers.tick(120_000);
-  assert.equal(f.manager.state.status, 'signedOut'); assert.equal(retained!.refreshToken, '');
-  await f.manager.retry(); assert.equal(f.calls.exchange, 1);
+
+test("a Rita retry prohibition ends the attempt even on HTTP 503", async context => {
+  const f = fixture(context);
+  let calls = 0;
+  f.deps.backend.complete = async () => { calls++; throw new ApiError(503, 0, "RITA_LOGIN_RESTART_REQUIRED"); };
+  await f.login();
+  await f.session.retry();
+  assert.equal(calls, 1);
+  assert.equal(f.session.state.status, "signedOut");
 });
-for (const status of [400, 401, 403, 409]) {
-  test(`handoff ${status} ends attempt without retry`, async () => {
-    const f = setup(); let count = 0;
-    f.deps.backend.handoff = async () => { count++; throw new ApiError(status); };
-    await f.manager.login(); await f.manager.retry();
-    assert.equal(count, 1); assert.equal(f.manager.state.status, 'signedOut');
-  });
-}
-for (const result of [{ type: 'cancel' }, { type: 'success', url: 'rita-id-app://redirect?state=wrong&code=x' },
-  { type: 'success', url: 'rita-id-app://redirect?state=wrong&error=access_denied' }]) {
-  test(`browser failure does not exchange or handoff: ${result.type}/${result.url ?? ''}`, async () => {
-    const f = setup(); f.deps.browser = async () => result; await f.manager.login();
-    assert.equal(f.calls.exchange, 0); assert.equal(f.calls.handoffs.length, 0); assert.equal(f.value(), null);
-  });
-}
-test('concurrent login and retry do not duplicate exchange or handoff', async () => {
-  const f = setup(); const gate = deferred<Awaited<ReturnType<typeof f.deps.backend.handoff>>>();
-  f.deps.backend.handoff = async () => gate.promise;
-  const pending = f.manager.login(); await new Promise(resolve => setImmediate(resolve));
-  await f.manager.login(); await f.manager.retry(); assert.equal(f.calls.exchange, 1);
-  gate.resolve({ sessionKey: 'X', expiresAt: expiry, profile: user }); await pending; await f.manager.logout();
+
+test("expired completion response is revoked instead of being stored", async context => {
+  const f = fixture(context);
+  const response = deferred<SessionGrant>();
+  f.deps.backend.complete = () => response.promise;
+  await f.session.login();
+  const login = f.session.receiveCallback(callback);
+  await nextTurn();
+  f.advance(60_000);
+  response.resolve(grant);
+  await login;
+  assert.deepEqual(f.closed, [grant.refreshToken]);
+  assert.equal(f.session.state.status, "signedOut");
 });
-test('logout during handoff rejects late X and closes it at B', async () => {
-  const f = setup(); const gate = deferred<Awaited<ReturnType<typeof f.deps.backend.handoff>>>();
-  f.deps.backend.handoff = async () => gate.promise;
-  const login = f.manager.login(); await new Promise(resolve => setImmediate(resolve));
-  await f.manager.logout(); gate.resolve({ sessionKey: 'X', expiresAt: expiry, profile: user }); await login;
-  assert.deepEqual(f.calls.logout, ['X']); assert.equal(f.value(), null); assert.equal(f.manager.state.user, null);
+
+test("logout during completion rejects and closes a late session", async context => {
+  const f = fixture(context);
+  const response = deferred<SessionGrant>();
+  f.deps.backend.complete = () => response.promise;
+  await f.session.login();
+  const login = f.session.receiveCallback(callback);
+  await nextTurn();
+  await f.session.logout();
+  response.resolve(grant);
+  await login;
+  assert.deepEqual(f.closed, [grant.refreshToken]);
+  assert.equal(f.values.size, 0);
+  assert.equal(f.session.state.status, "signedOut");
 });
-test('handoff response after deadline is closed and never persisted', async () => {
-  const f = setup(); f.deps.backend.handoff = async () => {
-    f.advance(120_000); return { sessionKey: 'X', expiresAt: expiry, profile: user };
-  };
-  await f.manager.login(); assert.deepEqual(f.calls.logout, ['X']); assert.equal(f.value(), null);
+
+test("logout waits for a running secure-store save and cleans the late token", async context => {
+  const f = fixture(context);
+  const save = f.deps.storage.saveSession;
+  const saving = deferred<void>();
+  const proceed = deferred<void>();
+  f.deps.storage.saveSession = async value => { saving.resolve(); await proceed.promise; await save(value); };
+  const login = f.login();
+  await saving.promise;
+  const logout = f.session.logout();
+  proceed.resolve();
+  await Promise.all([login, logout]);
+  assert.deepEqual(f.closed, [grant.refreshToken]);
+  assert.equal(f.values.size, 0);
+  assert.equal(f.session.state.status, "signedOut");
 });
-test('failed X save closes B session and clears local state', async () => {
-  const f = setup(); f.deps.storage.save = async () => { throw new Error('write failed'); };
-  await f.manager.login(); assert.deepEqual(f.calls.logout, ['X']); assert.equal(f.manager.state.status, 'signedOut');
-});
-test('failed cleanup blocks login until sign-out succeeds', async () => {
-  const f = setup(original); await f.manager.verify();
+
+test("secure-store cleanup failure blocks a new login until deletion succeeds", async context => {
+  const f = fixture(context);
+  await f.login();
   const clear = f.deps.storage.clear;
-  f.deps.storage.clear = async () => { throw new Error('clear failed'); };
-  await f.manager.logout(); assert.equal(f.manager.state.status, 'error'); assert.equal(f.manager.state.user, null);
-  await f.manager.login(); assert.equal(f.calls.exchange, 0);
-  f.deps.storage.clear = clear; await f.manager.logout(); await f.manager.login();
-  assert.equal(f.calls.exchange, 1); await f.manager.logout();
+  f.deps.storage.clear = async () => { throw new Error("unable to delete"); };
+  await f.session.logout();
+  await f.session.login();
+  assert.equal(f.session.state.status, "error");
+  assert.equal(f.starts.length, 1);
+  f.deps.storage.clear = clear;
+  await f.session.logout();
+  await f.session.login();
+  assert.equal(f.session.state.status, "waiting");
 });
-test('startup and foreground verify before publishing; network failure retains X and hides identity', async () => {
-  const f = setup(original); await f.manager.verify(); assert.equal(f.manager.state.status, 'authenticated');
-  const me = f.deps.backend.me; f.deps.backend.me = async () => { throw new TransportError(); };
-  await f.manager.verify(); assert.equal(f.manager.state.status, 'unverified'); assert.equal(f.manager.state.user, null);
-  assert.deepEqual(f.value(), original); f.deps.backend.me = me; await f.manager.retry();
-  assert.equal(f.manager.state.status, 'authenticated'); await f.manager.logout();
+
+test("cold verification refreshes once, saves replacement and checks /me before publishing", async context => {
+  const f = fixture(context, new Map([[SESSION_KEY, JSON.stringify(stored)]]));
+  const reading = deferred<UserProfile>();
+  type UserProfile = typeof user;
+  f.deps.backend.me = async token => { f.reads.push(token); return reading.promise; };
+  const verify = Promise.all([f.session.verify(), f.session.verify()]);
+  await nextTurn();
+  assert.equal(f.session.state.user, null);
+  assert.deepEqual(f.refreshes, [grant.refreshToken]);
+  assert.deepEqual(f.reads, [f.secondGrant().accessToken]);
+  assert.equal(JSON.parse(f.values.get(SESSION_KEY)!).refreshToken, f.secondGrant().refreshToken);
+  reading.resolve(user);
+  await verify;
+  assert.equal(f.session.state.status, "authenticated");
 });
-for (const status of [401, 403, 429, 503]) {
-  test(`verification ${status} has correct session semantics`, async () => {
-    const f = setup(original); f.deps.backend.me = async () => { throw new ApiError(status); };
-    await f.manager.verify(); assert.equal(f.manager.state.status, status === 401 ? 'signedOut' : 'unverified');
-    assert.equal(f.value() === null, status === 401); assert.equal(f.calls.exchange, 0); await f.manager.logout();
-  });
-}
-test('wrong origin or expired stored X is never sent anywhere', async () => {
-  for (const patch of [{ backendOrigin: 'https://different.invalid' }, { expiresAt: '2020-01-01T00:00:00Z' }]) {
-    const f = setup({ ...original, ...patch }); await f.manager.verify();
-    assert.equal(f.calls.me, 0); assert.equal(f.value(), null); assert.equal(f.calls.logout.length, 0);
-  }
+
+test("foreign or expired stored sessions never send a refresh token to C", async context => {
+  const f = fixture(context, new Map([[SESSION_KEY, JSON.stringify({ ...stored, backendOrigin: "https://other.example.invalid" })]]));
+  await f.session.verify();
+  assert.equal(f.refreshes.length, 0);
+  assert.equal(f.values.size, 0);
+  const expired = fixture(context, new Map([[SESSION_KEY, JSON.stringify({ ...stored, refreshExpiresAt: new Date(now).toISOString() })]]));
+  await expired.session.verify();
+  assert.equal(expired.refreshes.length, 0);
 });
-test('changed identity or expired server metadata never publishes a profile', async () => {
-  for (const result of [{ profile: { ...user, _id: '22345678-1234-4123-8123-123456789012' }, expiresAt: expiry },
-    { profile: user, expiresAt: '2020-01-01T00:00:00Z' }]) {
-    const f = setup(original); f.deps.backend.me = async () => result; await f.manager.verify();
-    assert.equal(f.manager.state.user, null); assert.equal(f.value(), null); assert.deepEqual(f.calls.logout, ['X']);
-  }
+
+test("profile verification mismatch closes the newly restored session", async context => {
+  const f = fixture(context, new Map([[SESSION_KEY, JSON.stringify(stored)]]));
+  f.deps.backend.me = async () => ({ ...user, id: "a45e6c29-f1b4-40f1-bac7-2d0582936375" });
+  await f.session.verify();
+  assert.deepEqual(f.closed, [f.secondGrant().refreshToken]);
+  assert.equal(f.session.state.status, "signedOut");
 });
-test('read failure hides identity and supports explicit verification retry', async () => {
-  const f = setup(original); const load = f.deps.storage.load;
-  f.deps.storage.load = async () => { throw new Error('read failed'); };
-  await f.manager.verify(); assert.equal(f.manager.state.status, 'unverified'); assert.equal(f.calls.me, 0);
-  f.deps.storage.load = load; await f.manager.retry(); assert.equal(f.manager.state.status, 'authenticated'); await f.manager.logout();
+
+test("concurrent business requests coalesce rotation and use the saved replacement", async context => {
+  const f = fixture(context);
+  await f.login();
+  f.advance(15 * 60_000 - 10_000);
+  await Promise.all([f.session.authorized("/api/mobile/me"), f.session.authorized("/api/mobile/me")]);
+  assert.deepEqual(f.refreshes, [grant.refreshToken]);
+  assert.deepEqual(f.requests, [f.secondGrant().accessToken, f.secondGrant().accessToken]);
+  assert.equal(JSON.parse(f.values.get(SESSION_KEY)!).refreshToken, f.secondGrant().refreshToken);
 });
-test('verification coalesces and late response cannot restore logged-out session', async () => {
-  const f = setup(original); const gate = deferred<{ profile: typeof user; expiresAt: string }>(); let calls = 0;
-  f.deps.backend.me = async () => { calls++; return gate.promise; };
-  const first = f.manager.verify(); const second = f.manager.verify(); assert.equal(first, second);
-  await new Promise(resolve => setImmediate(resolve)); await f.manager.logout();
-  gate.resolve({ profile: user, expiresAt: expiry }); await first;
-  assert.equal(calls, 1); assert.equal(f.value(), null); assert.equal(f.manager.state.status, 'signedOut');
+
+test("uncertain refresh is not retried and no business request is sent", async context => {
+  const f = fixture(context);
+  await f.login();
+  f.advance(15 * 60_000);
+  let refreshes = 0;
+  f.deps.backend.refresh = async () => { refreshes++; throw new TransportError(); };
+  await assert.rejects(f.session.authorized("/api/mobile/me"));
+  await f.session.retry();
+  assert.equal(refreshes, 1);
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.session.state.status, "signedOut");
+  assert.equal(f.values.size, 0);
 });
+
+test("logout during refresh closes both the known credential and late replacement", async context => {
+  const f = fixture(context);
+  await f.login();
+  f.advance(15 * 60_000);
+  const rotating = deferred<SessionGrant>();
+  f.deps.backend.refresh = () => rotating.promise;
+  const rejected = assert.rejects(f.session.authorized("/api/mobile/me"));
+  await nextTurn();
+  await f.session.logout();
+  rotating.resolve(f.secondGrant());
+  await rejected;
+  assert.deepEqual(f.closed, [grant.refreshToken, f.secondGrant().refreshToken]);
+  assert.equal(f.session.state.status, "signedOut");
+  assert.equal(f.values.size, 0);
+});
+
 for (const status of [401, 403, 503]) {
-  test(`private POST ${status} is never replayed and only 401 ends session`, async () => {
-    const f = setup(original); await f.manager.verify();
-    f.deps.backend.privateRequest = async () => { f.calls.private++; throw new ApiError(status); };
-    await assert.rejects(f.manager.authorized('/api/mobile/private/example', { method: 'POST', body: {} }));
-    assert.equal(f.calls.private, 1); assert.equal(f.value() === null, status === 401); await f.manager.logout();
+  test("private POST " + status + " is never replayed and only 401 ends the session", async context => {
+    const f = fixture(context);
+    await f.login();
+    let calls = 0;
+    f.deps.backend.privateRequest = async () => { calls++; throw new ApiError(status, 0); };
+    await assert.rejects(f.session.authorized("/api/mobile/private/example", { method: "POST", body: {} }));
+    assert.equal(calls, 1);
+    assert.equal(f.session.state.status, status === 401 ? "signedOut" : "authenticated");
   });
 }
-for (const outcome of ['401', 'network', 'false']) {
-  test(`logout ${outcome} clears local state with accurate revocation feedback`, async () => {
-    const f = setup(original); await f.manager.verify();
-    f.deps.backend.logout = async () => {
-      if (outcome === '401') throw new ApiError(401);
-      if (outcome === 'network') throw new TransportError();
-      return false;
-    };
-    await f.manager.logout(); assert.equal(f.value(), null);
-    assert.equal(f.manager.state.error === null, outcome === '401');
-  });
-}
-test('web auth runtime remains unsupported', () => assert.throws(() => webSession(), /Android and iOS/));
 
-test('logout during secure-store write serializes deletion after the write and closes X', async () => {
-  const f = setup(); const gate = deferred<void>(); const save = f.deps.storage.save;
-  f.deps.storage.save = async s => { await gate.promise; await save(s); };
-  const login = f.manager.login(); await new Promise(resolve => setImmediate(resolve));
-  const logout = f.manager.logout(); gate.resolve(); await Promise.all([login, logout]);
-  assert.equal(f.value(), null); assert.equal(f.manager.state.user, null); assert.deepEqual(f.calls.logout, ['X']);
-});
-test('late storage read after logout cannot revive an internal credential', async () => {
-  const f = setup(original); const gate = deferred<StoredSession | null>();
-  f.deps.storage.load = async () => gate.promise;
-  const verification = f.manager.verify(); await new Promise(resolve => setImmediate(resolve));
-  const logout = f.manager.logout(); gate.resolve(original); await Promise.all([verification, logout]);
-  await assert.rejects(f.manager.authorized('/api/mobile/private/example'), ApiError);
-  assert.equal(f.calls.private, 0); assert.equal(f.calls.me, 0); assert.equal(f.value(), null);
-});
-test('failed metadata save after verification closes session, rather than publishing identity', async () => {
-  const f = setup(original); f.deps.storage.save = async () => { throw new Error('disk'); };
-  await f.manager.verify(); assert.equal(f.manager.state.status, 'signedOut');
-  assert.equal(f.value(), null); assert.deepEqual(f.calls.logout, ['X']);
-});
-test('cancel during code exchange never hands off a late token response', async () => {
-  const f = setup(); const gate = deferred<{ accessToken: string; refreshToken: string }>();
-  f.deps.api.exchange = async () => gate.promise;
-  const login = f.manager.login(); await new Promise(resolve => setImmediate(resolve));
-  await f.manager.logout(); const tokens = { accessToken: 'oauth-a', refreshToken: 'oauth-r' };
-  gate.resolve(tokens); await login;
-  assert.equal(f.calls.handoffs.length, 0); assert.equal(tokens.refreshToken, ''); assert.equal(f.value(), null);
-});
-test('a fresh process cannot resume a handoff from persisted data', async () => {
-  const f = setup(); f.deps.backend.handoff = async () => { throw new TransportError(); };
-  await f.manager.login(); assert.equal(f.value(), null);
-  const restarted = setup(f.value()); await restarted.manager.verify();
-  assert.equal(restarted.manager.state.status, 'signedOut'); assert.equal(restarted.calls.handoffs.length, 0);
-  await f.manager.logout();
-});
-test('late private 401 cannot clear a newer login', async () => {
-  const f = setup(original); await f.manager.verify();
-  const gate = deferred<unknown>(); f.deps.backend.privateRequest = async () => gate.promise;
-  const request = f.manager.authorized('/api/mobile/private/example');
-  const rejection = assert.rejects(request, ApiError);
-  await new Promise(resolve => setImmediate(resolve)); await f.manager.logout(); await f.manager.login();
-  gate.reject(new ApiError(401)); await rejection;
-  assert.equal(f.manager.state.status, 'authenticated'); await f.manager.logout();
+test("late 401 from an older access token does not clear a rotated session", async context => {
+  const f = fixture(context);
+  await f.login();
+  const response = deferred<unknown>();
+  f.deps.backend.privateRequest = token => token === grant.accessToken ? response.promise : Promise.resolve({ ok: true });
+  const rejected = assert.rejects(f.session.authorized("/api/mobile/me"));
+  await nextTurn();
+  f.advance(15 * 60_000);
+  await f.session.authorized("/api/mobile/me");
+  response.reject(new ApiError(401, 0));
+  await rejected;
+  assert.equal(f.session.state.status, "authenticated");
+  assert.equal(f.values.size, 1);
 });
 
-test('oversized Retry-After cannot crash UI or extend handoff window', async () => {
-  const f = setup(); let count = 0;
-  f.deps.backend.handoff = async () => { count++; throw new ApiError(429, 1e30); };
-  await f.manager.login(); await f.manager.retry(); assert.equal(count, 1);
-  assert.equal(f.manager.state.status, 'handoff'); f.advance(120_000); await f.manager.retry();
-  assert.equal(f.manager.state.status, 'signedOut'); assert.equal(count, 1);
+test("temporary /me failure retains the current refresh token and allows manual verification", async context => {
+  const f = fixture(context);
+  await f.login();
+  const me = f.deps.backend.me;
+  f.deps.backend.me = async () => { throw new TransportError(); };
+  await f.session.verify();
+  assert.equal(f.session.state.status, "unverified");
+  assert.ok(f.values.has(SESSION_KEY));
+  f.deps.backend.me = me;
+  await f.session.retry();
+  assert.equal(f.session.state.status, "authenticated");
 });
+
+test("logout network failure still clears local storage and reports uncertain revocation", async context => {
+  const f = fixture(context);
+  await f.login();
+  f.deps.backend.logout = async () => { throw new TransportError(); };
+  await f.session.logout();
+  assert.match(f.session.state.error!, /Chưa xác nhận/);
+  assert.equal(f.values.size, 0);
+  assert.equal(f.session.state.status, "signedOut");
+});
+
+test("web sign-in remains unavailable", () => assert.throws(() => webSession(), /Android and iOS/));

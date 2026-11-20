@@ -53,8 +53,7 @@ export default function LoginScreen() {
             themeColor="textSecondary"
             style={styles.cardDesc}
           >
-            Authenticate securely using your organization email via Rita ID SSO
-            Provider.
+            Mở ứng dụng Rita Võ ID để xác nhận đăng nhập.
           </ThemedText>
 
           {error && (
@@ -73,34 +72,35 @@ export default function LoginScreen() {
                   ? logout
                   : login
             }
-            disabled={isLoading || !supported || !configured}
+            accessibilityRole="button"
+            disabled={isLoading || status === "waiting" || !supported || !configured}
             style={({ pressed }) => [
               styles.loginButton,
               { backgroundColor: "#2563eb" },
               pressed && styles.pressed,
-              isLoading && styles.disabled,
+              (isLoading || status === "waiting" || !supported || !configured) && styles.disabled,
             ]}
           >
             {isLoading ? (
               <ActivityIndicator color="#ffffff" />
             ) : (
               <ThemedText style={styles.loginButtonText}>
-                {status === "handoff"
-                  ? "Thử lại kết nối"
-                  : status === "unverified"
-                    ? "Retry session verification"
-                    : status === "error" && configured
-                      ? "Retry sign-out"
-                      : "Sign In with Rita ID"}
+                {status === "waiting"
+                  ? "Đang chờ Rita Võ ID"
+                  : status === "handoff"
+                    ? "Thử lại kết nối"
+                    : status === "unverified"
+                      ? "Thử xác minh phiên"
+                      : status === "error" && configured
+                        ? "Thử dọn phiên"
+                        : "Đăng nhập bằng Rita Võ ID"}
               </ThemedText>
             )}
           </Pressable>
-          {(status === "unverified" || status === "handoff") && (
-            <Pressable onPress={logout} disabled={isLoading}>
+          {(status === "unverified" || status === "handoff" || status === "waiting") && (
+            <Pressable onPress={logout} disabled={isLoading} accessibilityRole="button">
               <ThemedText type="small">
-                {status === "handoff"
-                  ? "Cancel sign-in"
-                  : "Sign out on this device"}
+                {status === "unverified" ? "Đăng xuất trên thiết bị" : "Hủy đăng nhập"}
               </ThemedText>
             </Pressable>
           )}

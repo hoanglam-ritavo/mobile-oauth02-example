@@ -1,65 +1,33 @@
-﻿# Rita ID Mobile integration example
+# Rita ID Mobile integration example
 
-Expo/React Native example for Android and iOS. This source is application **A**; the sibling OAuth Web Example provides application backend **B**. Rita ID is the identity provider. The current package uses Expo 57, React 19 and React Native 0.86 with Expo Router.
-
-**A requires B's mobile endpoints.** They now exist in the sibling source when mobile mode is enabled. Source availability does not establish live end-to-end compatibility. B is a single-process RAM demo: restart loses sessions, multiple workers are unsupported and production mode is rejected. There is no direct-token fallback or bundled mock server in A.
+Expo and React Native example for Android and iOS. This source is **D**, the partner app. It opens **B**, the Rita Võ ID App, and uses **C**, the partner backend, for its session. **A**, the Rita Võ ID Backend, issues the OAuth code redeemed by C.
 
 Read [Architecture](ARCHITECTURE.md) for runtime behavior and [Agent guidance](AGENTS.md) before changing this source.
 
 ## Flow
 
-1. A opens Rita ID Portal in the system browser using Authorization Code + PKCE S256.
-2. A validates the one-use state and exact `rita-id-app://redirect` callback, then exchanges the code directly with Rita ID.
-3. A holds the OAuth token pair only in memory and hands it to B.
-4. B validates the handoff and returns an opaque application session key X, expiration and verified profile.
-5. A stores only X and session metadata in SecureStore. All subsequent profile/private/logout requests go to B with `Authorization: Bearer X`.
-
-B owns OAuth token refresh/revocation. A does not decode JWTs or call Rita ID userinfo, refresh or logout. Rita ID's browser SSO cookie is not logged out when A signs out.
-
-The [A–B contract](docs/mobile-backend-contract.md) records phase-1 fields and requirements. Its claim that B is not implemented is historical. Consult [B's current mobile guide](../oauth02-web-integration-example/docs/mobile-backend.md) for implemented behavior and the accepted limit of token validation: identity/client/scope consistency does not prove both original tokens belong to the same grant. Neither document establishes full OIDC support. Sibling links assume the standard adjacent checkouts.
+1. D creates a PKCE challenge and asks C for a login attempt. It saves the pending attempt in SecureStore before opening B.
+2. Once B has the planned native route, it authenticates the user as needed, handles Rita consent and returns to D through `rita-id-app://redirect`.
+3. D validates the callback and sends the code and its verifier to C. C exchanges the code, maps the Rita employee and returns a pair of C tokens.
+4. D stores the refresh token in SecureStore and keeps access and profile in memory. Requests go to C. Sign-out clears local credentials and requests revocation of the C session.
 
 ## Configuration and native setup
 
-Use Node.js 24 and the committed npm lockfile. From this mobile project root:
+Use Node.js 24 and the committed npm lockfile.
 
 ```powershell
 npm ci
 if (!(Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-Create `.env` from `.env.example` only if it does not already exist. Existing local `.env` is not migrated automatically.
-
 | Variable | Purpose |
 | --- | --- |
-| `EXPO_PUBLIC_RITA_BASE_URL` | Rita ID portal origin, e.g. `https://id.example.com`; API base is this origin plus `/api`. |
-| `EXPO_PUBLIC_APP_BACKEND_BASE_URL` | Application B origin, e.g. `https://app.example.com`; mobile paths include `/api/mobile`. Required. |
-| `EXPO_PUBLIC_OAUTH_CLIENT_ID` | Registered **public** mobile client ID; must also be allowed by B. |
-| `EXPO_PUBLIC_OAUTH_REDIRECT_URI` | Exactly `rita-id-app://redirect`; this is also the parser default when omitted. |
+| `EXPO_PUBLIC_APP_BACKEND_BASE_URL` | Device-reachable origin of C, e.g. `https://app.example.invalid`. Paths, credentials, queries and fragments are rejected. HTTPS is required in release. |
+| `EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL` | Entry for B's authorization screen. Defaults to `rita-id://oauth/authorize`. |
 
-Both base URLs are origins only: no path, credentials, query or fragment. HTTP is accepted only in the development runtime; release builds require HTTPS for both origins. Every `EXPO_PUBLIC_*` variable is public bundle data. Never add a client secret.
+The old Portal URL, public OAuth client ID and configurable callback settings belong to the former demo. The supported callback is fixed to `rita-id-app://redirect`; C supplies the client ID and must return the same registered callback. All `EXPO_PUBLIC_*` values are public bundle values. Keep `client_secret` in C.
 
-Use a device-reachable Rita Portal origin whose `/api` routes reach Rita ID Backend. A appends `/api` itself; do not put that path into either origin variable. Proxy configuration belongs to the portal/server deployment.
-
-### Start application backend B
-
-In a separate terminal, from the sibling `oauth02-web-integration-example` root:
-
-```powershell
-npm ci
-if (!(Test-Path .mobile.env)) { Copy-Item .mobile.env.example .mobile.env }
-# Configure the new file before starting the server.
-npm run dev:mobile
-```
-
-Set B's `RITA_MOBILE_CLIENT_ID` to A's `EXPO_PUBLIC_OAUTH_CLIENT_ID` and configure B's `RITA_API_URL` to reach Rita ID from the server. The mobile template uses port `3004` and `HOST=127.0.0.1`; the web template uses `3003`. The mobile profile reads `.mobile.env`, not the legacy `.env`. See [B's profile setup](../oauth02-web-integration-example/README.md#separate-mobile-process-and-legacy-startup) for precedence and compiled startup commands.
-
-For the standard Android emulator, A can use `http://10.0.2.2:3004` to reach B on the host. For a physical device, use `http://<computer-LAN-IP>:3004`, bind B to a reachable interface (for example `HOST=0.0.0.0` in a controlled local test) and allow the port through the firewall. `0.0.0.0` is a bind address, not A's destination. A physical device's `localhost` refers to itself. Apply the same device-reachability rule to the Rita Portal origin; use its actual configured port.
-
-### Build and run A
-
-Register the exact mobile callback and a public client with `authorization_code` and `refresh_token` grants and `openid profile email` scopes in Rita ID before live testing. The browser example's confidential client is a separate client; do not reuse its secret. Do not assume the portal UI provisions public clients; use the supported provisioning process for your Rita ID environment.
-
-Android requires the Android SDK, compatible JDK, Android tooling and an emulator or connected device. iOS requires macOS, Xcode and appropriate signing; it cannot be built on this Windows host.
+Start C using its [README](../mobile-oauth02-example-backend/README.md). C defaults to port 3005. Android emulator development can point to `http://10.0.2.2:3005`. For a physical device, configure a reachable origin. A localhost address on the phone refers to the phone itself. Use HTTPS for a release and keep development services scoped to a controlled network.
 
 ```powershell
 npm run android
@@ -67,34 +35,15 @@ npm run android
 npm run ios
 ```
 
-Native callback acceptance needs a build with the registered URL scheme, not Expo Go. Restart Metro after changing public environment variables. Rebuild/reinstall when changing a native scheme. `app.json` registers `rita-id-app` and Android package `com.kompact.ritaidapp`. `npm start` starts Metro; `npm run web` starts the web preview, where sign-in is deliberately unsupported.
+D registers `rita-id-app` and Android package `com.kompact.ritaidapp`. Device acceptance requires a build of B with the planned `rita-id://oauth/authorize` route and consent screen. The current B checkout has the `rita-id` scheme. See [B's implementation status](../rita-id-app/ARCHITECTURE.md#planned-partner-mobile-authorization). Restart Metro after updating public environment values. Native configuration changes require rebuilding and reinstalling. The web preview has sign-in disabled.
 
 ## Sessions and application requests
 
-Only X and session metadata are persisted in SecureStore. Legacy OAuth-token records require a new login. Startup and foreground verification hide identity until B validates the session. See [session lifecycle and storage](ARCHITECTURE.md#session-lifecycle-and-storage) for the exact record, migration behavior and failure handling.
+A previously opened attempt can be restored on cold launch if the callback arrives before expiry. Only the first valid matching callback can claim it. D offers a short explicit retry after an uncertain completion or a temporary C capacity rejection. Refresh rotates both tokens and uncertain refresh requires login again. C stores data in RAM and resets sessions when it restarts.
 
-Components can call `useAuth().request('/api/mobile/private/example')` for B's existing GET demo resource. The helper supports GET/POST/PUT/PATCH/DELETE for resources that implement those methods, returns unknown JSON for callers to validate and hides X. Only literal `/api/mobile/` resource paths are accepted; auth paths, query strings, encoded paths and external URLs are rejected. There is no dedicated private-resource screen; Home renders the verified profile.
-
-A 401 ends the application session; A never refreshes or replays resource requests. A 403 is a permission error. Temporary verification failures hide identity and allow retry. Handoff failures may offer a manual retry within two minutes. Sign-out clears local state and reports when server revocation cannot be confirmed; failed local cleanup requires retrying sign-out before a new login.
+Home displays name, email and the C user UUID. Private resources may use `useAuth().request('/api/mobile/me')` or other supported paths under `/api/mobile/`. Auth paths, encoded or foreign URLs, and automatic replay are excluded. See [session lifecycle and storage](ARCHITECTURE.md#session-lifecycle-and-storage).
 
 ## Validation
-
-### Home screen presentation
-
-The signed-in Home screen follows the system light/dark theme, with a compact
-initials profile, selectable account values and collapsed **Integration details**
-(local UUID, raw group and developer access). Sign out remains the existing
-session action. Native tab colors and the signed-in status bar match the Home
-palette; Login, Explore content and authentication contracts are unchanged.
-
-Native tabs handle the bottom safe area; Home adds Android top/side insets and
-uses automatic scroll insets on iOS. Large system text or narrow screens stack
-the profile vertically. Missing profile values display an em dash.
-
-Manual visual acceptance: check Android/iOS in both themes at approximately
-320/390/430 logical-pixel widths, including long names/emails, empty values,
-expanded UUID, 200% text size, screen-reader disclosure state, tab switching and
-sign-out. Use fictional profiles; do not capture real account data for fixtures.
 
 ```powershell
 npm run typecheck
@@ -102,36 +51,31 @@ npm test
 git diff --check
 ```
 
-Tests use injected HTTP/browser/storage/clock and a fake B. They do not load `.env`, contact Rita ID, or prove B's token validation/rotation or browser compatibility. No dependency upgrade or database migration is needed.
-
-Export with fictional release origins, without local `.env`:
+Tests use fictional profiles and mock native adapters. Export platforms with fictional release values and local dotenv disabled.
 
 ```powershell
 $env:EXPO_NO_DOTENV='1'
 $env:CI='1'
-$env:EXPO_PUBLIC_RITA_BASE_URL='https://id.example.invalid'
 $env:EXPO_PUBLIC_APP_BACKEND_BASE_URL='https://app.example.invalid'
-$env:EXPO_PUBLIC_OAUTH_CLIENT_ID='fictional-mobile-client'
-$env:EXPO_PUBLIC_OAUTH_REDIRECT_URI='rita-id-app://redirect'
+$env:EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL='rita-id://oauth/authorize'
 node node_modules/expo/bin/cli export --platform android --platform ios --output-dir dist-auth-check --max-workers 2
 ```
 
-Run these environment assignments in a dedicated shell; they override only that process/session. Exports validate bundling, not installed-device behavior. Expo lint has no established project gate here; do not use `reset-project` as a migration command.
+Use a dedicated shell for these environment assignments. Exports exercise bundling. For UI acceptance check both themes, long names and emails, large system text, accessibility labels and sign-out on installed builds.
 
 ## Current verification status
 
-Documentation maintenance on **2026-10-23**, against revision `a874e33` plus the existing uncommitted mobile working tree. This task changes only README, ARCHITECTURE and AGENTS; sibling B was inspected read-only.
+2026-11-20, base revision e2772f6 plus the D app-switch and C-session changes.
 
-- Source inspection: configuration, package commands, UI/session/adapters and existing tests were checked; B's mobile routes and profile template exist. This is not a live integration result.
-- Local Markdown links and heading anchors: passed, 34 references across all three files, using a read-only Node check.
-- Documented npm commands: 16 occurrences matched the owning project's package scripts; referenced local command/setup paths exist. Commands were inspected, not executed as runtime checks.
-- `git diff --check`: passed before and after edits with LF/CRLF conversion warnings. The new untracked documents were also checked directly for whitespace errors.
-- SHA-256 comparison of tracked and non-ignored untracked files outside the three-document scope: unchanged from the start of this task.
-- Typecheck, tests, Expo export, native builds/devices, real Rita ID/HRM and browser flows were not rerun for this documentation-only change. Historical test counts below are not new results.
+- Application and test typecheck passed. The Node test suite passed 39/39 using fictional profiles and injected native, storage and HTTP dependencies. Git diff reported no whitespace errors.
+- A local HTTP smoke test used D's real adapter, the compiled C service and a Rita stub. It verified one exchange for duplicate callbacks, private profile, cold refresh, sign-out and fresh login after restarting C.
+- Android and iOS JavaScript exports passed with dotenv disabled and fictional configuration. Installed-device handoff and live Rita authorization still require B's authorization route and a registered confidential client.
+
+Documentation reconciliation on **2026-11-20**, against the existing D implementation and working tree. Markdown links, heading anchors and documented command paths were checked. The runtime results above remain the record of the earlier implementation checks.
 
 ### Historical verification snapshots
 
-The following records are preserved from earlier work. References to phase 2 being future work describe the state at that time, not the current B implementation.
+The following records describe the earlier handoff demo. In those snapshots, A means the partner mobile app (now D), and B means the OAuth Web Example backend used by that demo.
 
 Home presentation verification on **2026-10-23**, against the existing uncommitted
 mobile working tree plus Home, palette, native-tab and signed-in status-bar changes:
@@ -165,12 +109,8 @@ Initial sandbox test/export attempts failed with subprocess `spawn EPERM`; permi
 
 ## Phase-2 acceptance checklist
 
-This section retains its original anchor; it is now the live integration acceptance checklist. With B's mobile profile enabled, register the public client and device-reachable origins; test login/consent/callback/handoff, restart A, private request, expired Rita access token refreshed by B, logout and another account. Also test lost handoff response, refused consent, foreground without network, invalid X, permission denial, B restart and session expiration.
-
-B must preserve its existing browser routes/cookies/CSRF flow and test it separately. A successful mobile mock suite does not establish those properties.
-
-B provides `npm run test:mobile-compat` from its own root. It exercises A's adapter against local B and a fictional provider, not the native UI or real Rita ID. Consult [B's verification guidance](../oauth02-web-integration-example/docs/mobile-backend.md#validation-and-live-acceptance) for that separate check; it was not run for this documentation update.
+Once B's native route is available, install B and D and use the [current C contract](../mobile-oauth02-example-backend/README.md#hợp-đồng-với-d). Configure a Rita confidential client and the exact `rita-id-app://redirect` callback in A and C. On Android and iOS, test B with and without an existing session, new and previously granted consent, refusal, warm and cold D callbacks, duplicate callbacks, B absent, C restart and logout.
 
 ## Historical documentation
 
-The [pre-phase-1 README](docs/history/README-before-backend-session.md) preserves dated checks and former direct-token instructions. Its refresh/logout, storage and configuration guidance is obsolete for the current implementation and is retained only as history.
+The [former mobile handoff contract](docs/mobile-backend-contract.md) and [pre-handoff README](docs/history/README-before-backend-session.md) describe earlier demos. The [current API contract](../mobile-oauth02-example-backend/README.md#hợp-đồng-với-d) belongs to C.

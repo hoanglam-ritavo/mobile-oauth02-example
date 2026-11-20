@@ -1,4 +1,6 @@
-﻿# Mobile A – backend B contract (phase 1, 2026-10-23)
+# Mobile A – backend B contract (phase 1, 2026-10-23)
+
+> Historical contract for the previous public-client demo. In this document, A is the partner mobile app (now D), and B is the former OAuth Web Example backend. The current D app uses the [C API contract](../../mobile-oauth02-example-backend/README.md#hợp-đồng-với-d).
 
 This document specifies the API consumed by Mobile Example. **The endpoints are not implemented in OAuth Web Example yet.** Phase 2 must implement and verify them without replacing the browser demo. Mock tests in A are client contract evidence only.
 

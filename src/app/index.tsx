@@ -8,8 +8,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Fonts, HomeColors, type HomePalette } from '@/constants/theme';
 import { useAuth } from '@/context/auth-context';
 
-const groupLabels = { EMPLOYEE: 'Employee', CUSTOMER: 'Customer', ENTERPRISE: 'Enterprise' };
-
 function DetailRow({ label, value, colors, first = false, mono = false }: {
   label: string;
   value: string | null | undefined;
@@ -68,11 +66,6 @@ export default function HomeScreen() {
           </View>
           <View style={styles.identity}>
             <Text accessibilityRole="header" style={[styles.name, { color: colors.text }]}>{name}</Text>
-            <View style={[styles.badge, { backgroundColor: colors.accent }]}>
-              <Text style={[styles.badgeText, { color: colors.brand }]}>
-                {user ? groupLabels[user.groups] : '—'}
-              </Text>
-            </View>
           </View>
         </View>
 
@@ -81,9 +74,7 @@ export default function HomeScreen() {
             Account information
           </Text>
           <View style={[styles.card, styles.details, card]}>
-            <DetailRow first label="Employee ID" value={user?.employee_id} colors={colors} />
-            <DetailRow label="Email" value={user?.email} colors={colors} />
-            <DetailRow label="Phone" value={user?.phone_number} colors={colors} />
+            <DetailRow first label="Email" value={user?.email} colors={colors} />
           </View>
         </View>
 
@@ -101,9 +92,7 @@ export default function HomeScreen() {
           </Pressable>
           {detailsOpen && (
             <View style={[styles.integrationContent, { borderColor: colors.border }]}>
-              <DetailRow first mono label="Local UUID" value={user?._id} colors={colors} />
-              <DetailRow label="Group" value={user?.groups} colors={colors} />
-              <DetailRow label="Developer access" value={user ? (user.is_developer ? 'Yes' : 'No') : null} colors={colors} />
+              <DetailRow first mono label="Application user ID" value={user?.id} colors={colors} />
             </View>
           )}
         </View>
@@ -131,8 +120,6 @@ const styles = StyleSheet.create({
   initials: { fontSize: 24, fontWeight: '700' },
   identity: { flexShrink: 1, gap: 8 },
   name: { fontSize: 22, fontWeight: '600' },
-  badge: { alignSelf: 'flex-start', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4, maxWidth: '100%' },
-  badgeText: { fontSize: 13, fontWeight: '600' },
   section: { gap: 12 },
   sectionTitle: { fontSize: 16, fontWeight: '600' },
   details: { paddingHorizontal: 20 },

@@ -18,9 +18,9 @@ const noop = async () => {};
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [runtime] = useState<{ session?: AuthSession; error?: string }>(() => {
-    if (Platform.OS === 'web') return { error: 'Sign-in is supported on Android and iOS only.' };
+    if (Platform.OS === 'web') return { error: 'Đăng nhập chỉ hỗ trợ trên Android và iOS.' };
     try { return { session: createNativeAuthSession() }; }
-    catch (error) { return { error: error instanceof Error ? error.message : 'Invalid Rita ID configuration.' }; }
+    catch (error) { return { error: error instanceof Error ? error.message : 'Cấu hình Rita Võ ID không hợp lệ.' }; }
   });
   const [state, setState] = useState<AuthState>({
     status: runtime.session ? 'loading' : 'error', user: null, error: runtime.error ?? null,
@@ -29,13 +29,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const session = runtime.session;
     if (!session) return;
     const unsubscribe = session.subscribe(setState);
+    const disconnectLinks = session.connectLinks();
     void session.verify();
     let previous = AppState.currentState;
     const listener = AppState.addEventListener('change', next => {
       if (next === 'active' && previous !== 'active') void session.verify();
       previous = next;
     });
-    return () => { unsubscribe(); listener.remove(); };
+    return () => { disconnectLinks(); unsubscribe(); listener.remove(); };
   }, [runtime]);
 
   return (

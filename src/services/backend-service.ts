@@ -1,93 +1,102 @@
-﻿import type { AuthConfig } from "../constants/config";
-import {
-  ContractError,
-  createJsonClient,
-  isExpiry,
-  isRecord,
-  isToken,
-  parseProfile,
-  type Tokens,
-} from "./auth-service";
+import { RITA_CALLBACK_URI, type AuthConfig } from "../constants/config";
+import { ContractError, createJsonClient, isExpiry, isRecord, isToken, isUuid } from "./auth-service";
 
-export interface Handoff extends Tokens {
-  handoffId: string;
+export interface UserProfile {
+  id: string;
+  name: string;
+  email: string;
+}
+export interface LoginAttempt {
+  attemptId: string;
+  state: string;
+  expiresAt: string;
   clientId: string;
+  redirectUri: string;
+  scope: string;
+}
+export interface LoginCompletion {
+  attemptId: string;
+  state: string;
+  code: string;
+  codeVerifier: string;
+}
+export interface SessionGrant {
+  accessToken: string;
+  accessExpiresAt: string;
+  refreshToken: string;
+  refreshExpiresAt: string;
+  user: UserProfile;
 }
 export interface PrivateRequest {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
 }
-export function createBackendApi(
-  config: AuthConfig,
-  request: typeof fetch = fetch,
-  timeoutMs = 10_000,
-) {
+
+function parseUser(value: unknown): UserProfile {
+  if (!isRecord(value) || !isUuid(value.id) ||
+      typeof value.name !== "string" || !value.name.trim() || value.name.length > 512 ||
+      typeof value.email !== "string" || !value.email.trim() || value.email.length > 320) throw new ContractError();
+  return { id: value.id, name: value.name, email: value.email };
+}
+
+export function createBackendApi(config: AuthConfig, request: typeof fetch = fetch, timeoutMs = 10_000) {
   const json = createJsonClient(config.backendOrigin, request, timeoutMs);
-  const bearer = (key: string) => ({ Authorization: `Bearer ${key}` });
-  const identity = (data: unknown) => {
-    if (!isRecord(data) || !isExpiry(data.expiresAt)) throw new ContractError();
-    return { profile: parseProfile(data.profile), expiresAt: data.expiresAt };
-  };
+  const post = (path: string, body: unknown) => json("/api/mobile/auth/" + path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  const bearer = (accessToken: string) => ({ Authorization: "Bearer " + accessToken });
+
+  async function logout(refreshToken: string): Promise<void> {
+    if (await post("logout", { refreshToken }) !== undefined) throw new ContractError();
+  }
+
+  async function grant(data: unknown): Promise<SessionGrant> {
+    if (!isRecord(data) || !isToken(data.refreshToken)) throw new ContractError();
+    const refreshToken = data.refreshToken;
+    try {
+      if (!isToken(data.accessToken) || !isExpiry(data.accessExpiresAt) || !isExpiry(data.refreshExpiresAt) ||
+          Date.parse(data.accessExpiresAt) > Date.parse(data.refreshExpiresAt)) throw new ContractError();
+      return {
+        accessToken: data.accessToken, accessExpiresAt: data.accessExpiresAt,
+        refreshToken, refreshExpiresAt: data.refreshExpiresAt, user: parseUser(data.user),
+      };
+    } catch (error) {
+      await logout(refreshToken).catch(() => {});
+      throw error;
+    }
+  }
+
   return {
-    async handoff(payload: Handoff) {
-      const data = await json("/api/mobile/auth/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!isRecord(data) || !isToken(data.sessionKey))
-        throw new ContractError();
-      // A known key must be closed even if the rest of the response is malformed.
-      try {
-        return { ...identity(data), sessionKey: data.sessionKey };
-      } catch (error) {
-        await json("/api/mobile/auth/logout", {
-          method: "POST",
-          headers: bearer(data.sessionKey),
-        }).catch(() => undefined);
-        throw error;
-      }
+    async start(codeChallenge: string): Promise<LoginAttempt> {
+      const data = await post("attempts", { codeChallenge });
+      if (!isRecord(data) || !isUuid(data.attemptId) || !isToken(data.state) || !isExpiry(data.expiresAt) ||
+          typeof data.clientId !== "string" || !/^[\x21-\x7e]{1,256}$/.test(data.clientId) ||
+          data.redirectUri !== RITA_CALLBACK_URI || data.scope !== "openid profile email") throw new ContractError();
+      return {
+        attemptId: data.attemptId, state: data.state, expiresAt: data.expiresAt,
+        clientId: data.clientId, redirectUri: data.redirectUri, scope: data.scope,
+      };
     },
-    async me(key: string) {
-      return identity(await json("/api/mobile/me", { headers: bearer(key) }));
+    async complete(payload: LoginCompletion): Promise<SessionGrant> {
+      const { attemptId, state, code, codeVerifier } = payload;
+      return grant(await post("session", { attemptId, state, code, codeVerifier }));
     },
-    async logout(key: string) {
-      const data = await json("/api/mobile/auth/logout", {
-        method: "POST",
-        headers: bearer(key),
-      });
-      if (
-        !isRecord(data) ||
-        data.loggedOut !== true ||
-        typeof data.revokeConfirmed !== "boolean"
-      )
-        throw new ContractError();
-      return data.revokeConfirmed;
+    async refresh(refreshToken: string): Promise<SessionGrant> {
+      return grant(await post("refresh", { refreshToken }));
     },
-    async privateRequest(
-      key: string,
-      path: string,
-      options: PrivateRequest = {},
-    ): Promise<unknown> {
-      // Restrict this helper to mobile resources, including normalized/encoded paths.
-      if (
-        !/^\/api\/mobile\/[a-zA-Z0-9/_-]+$/.test(path) ||
-        path.includes("//") ||
-        path.startsWith("/api/mobile/auth/")
-      )
-        throw new ContractError();
-      return json(path, {
-        method: options.method ?? "GET",
-        headers: {
-          ...bearer(key),
-          ...(options.body === undefined
-            ? {}
-            : { "Content-Type": "application/json" }),
-        },
-        ...(options.body === undefined
-          ? {}
-          : { body: JSON.stringify(options.body) }),
-      });
+    async me(accessToken: string): Promise<UserProfile> {
+      const data = await json("/api/mobile/me", { headers: bearer(accessToken) });
+      if (!isRecord(data)) throw new ContractError();
+      return parseUser(data.user);
+    },
+    logout,
+    async privateRequest(accessToken: string, path: string, options: PrivateRequest = {}): Promise<unknown> {
+      if (!/^\/api\/mobile\/[a-zA-Z0-9/_-]+$/.test(path) || path.includes("//") ||
+          path === "/api/mobile/auth" || path.startsWith("/api/mobile/auth/")) throw new ContractError();
+      const headers: Record<string, string> = bearer(accessToken);
+      const body = options.body === undefined ? undefined : JSON.stringify(options.body);
+      if (body !== undefined) headers["Content-Type"] = "application/json";
+      return json(path, { method: options.method ?? "GET", headers, body });
     },
   };
 }

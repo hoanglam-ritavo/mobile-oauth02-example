@@ -1,28 +1,31 @@
-﻿import { readAuthConfig } from "../src/constants/config";
-import { parseProfile, positionCategories } from "../src/services/auth-service";
-export const config = readAuthConfig({
-  EXPO_PUBLIC_RITA_BASE_URL: "https://id.example.invalid",
-  EXPO_PUBLIC_APP_BACKEND_BASE_URL: "https://app.example.invalid",
-  EXPO_PUBLIC_OAUTH_CLIENT_ID: "mobile-client",
-});
+import { readAuthConfig, RITA_CALLBACK_URI } from "../src/constants/config";
+import type { LoginAttempt, SessionGrant } from "../src/services/backend-service";
+import type { StoredAttempt, StoredSession } from "../src/services/session-storage";
 
-console.log("config : ", config);
-export const wireProfile = {
-  sub: "12345678-1234-4123-8123-123456789012",
-  name: "Test",
-  email: "test@example.invalid",
-  employee_id: null,
-  phone_number: null,
-  is_developer: false,
-  groups: "EMPLOYEE",
-  avatar: null,
-  position: {
-    text: null,
-    parser: {
-      ...Object.fromEntries(positionCategories.map((key) => [key, ""])),
-      others: [],
-    },
-  },
+export const config = readAuthConfig({ EXPO_PUBLIC_APP_BACKEND_BASE_URL: "https://app.example.invalid" });
+export const now = Date.parse("2030-01-01T00:00:00Z");
+export const accessExpiry = new Date(now + 15 * 60_000).toISOString();
+export const refreshExpiry = new Date(now + 24 * 60 * 60_000).toISOString();
+export const verifier = "a".repeat(64);
+export const code = "example-code";
+export const user = { id: "12345678-1234-4123-8123-123456789012", name: "Test", email: "test@example.invalid" };
+export const attempt: LoginAttempt = {
+  attemptId: "ef64b237-4646-4c62-824f-9df79953e5c9",
+  state: "s".repeat(43),
+  expiresAt: new Date(now + 10 * 60_000).toISOString(),
+  clientId: "confidential-client-id", redirectUri: RITA_CALLBACK_URI, scope: "openid profile email",
 };
-export const user = parseProfile(wireProfile);
-export const expiry = "2030-01-01T00:00:00.000Z";
+export const callback = RITA_CALLBACK_URI + "?state=" + attempt.state + "&code=" + code;
+export const pending: StoredAttempt = {
+  version: 1, attemptId: attempt.attemptId, state: attempt.state, verifier,
+  expiresAt: attempt.expiresAt, backendOrigin: config.backendOrigin,
+};
+export const completion = { attemptId: attempt.attemptId, state: attempt.state, code, codeVerifier: verifier };
+export const grant: SessionGrant = {
+  accessToken: "a".repeat(43), accessExpiresAt: accessExpiry,
+  refreshToken: "r".repeat(43), refreshExpiresAt: refreshExpiry, user,
+};
+export const stored: StoredSession = {
+  version: 3, refreshToken: grant.refreshToken, refreshExpiresAt: refreshExpiry,
+  userId: user.id, backendOrigin: config.backendOrigin,
+};

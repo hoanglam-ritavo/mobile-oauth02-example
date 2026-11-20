@@ -1,48 +1,36 @@
 declare const __DEV__: boolean;
 
+export const RITA_CALLBACK_URI = "rita-id-app://redirect";
+const defaultAuthorizeUrl = "rita-id://oauth/authorize";
+
 export interface AuthConfig {
-  apiUrl: string;
-  portalUrl: string;
-  clientId: string;
-  redirectUri: string;
   backendOrigin: string;
+  authorizeUrl: string;
 }
 
 export function readAuthConfig(env: Record<string, string | undefined>, development = false): AuthConfig {
-  const origin = (key: string) => {
-    const value = env[key];
-    if (!value || value !== value.trim()) throw new Error(`Configure ${key}.`);
-    let url: URL;
-    try { url = new URL(value); } catch { throw new Error(`Invalid ${key}.`); }
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password ||
-        url.pathname !== '/' || /[?#<>]/.test(value)) {
-      throw new Error(`Invalid ${key}: use an HTTP(S) origin.`);
-    }
-    if (!development && url.protocol !== 'https:') throw new Error(`HTTPS required for ${key}.`);
-    return url.origin;
-  };
-  const clientId = env.EXPO_PUBLIC_OAUTH_CLIENT_ID?.trim();
-  if (!clientId || /^(replace|placeholder|<)/i.test(clientId)) {
-    throw new Error('Configure EXPO_PUBLIC_OAUTH_CLIENT_ID.');
+  const value = env.EXPO_PUBLIC_APP_BACKEND_BASE_URL;
+  const invalidOrigin = () => new Error("Configure EXPO_PUBLIC_APP_BACKEND_BASE_URL as an HTTP(S) origin. HTTPS is required in release builds.");
+  if (!value || !/^https?:\/\/[^/?#\\]/i.test(value) || /[\s?#<>\\]/.test(value)) throw invalidOrigin();
+  let origin: URL;
+  try {
+    origin = new URL(value);
+  } catch {
+    throw invalidOrigin();
   }
-  const redirectUri = env.EXPO_PUBLIC_OAUTH_REDIRECT_URI ?? 'rita-id-app://redirect';
-  if (redirectUri !== 'rita-id-app://redirect') {
-    throw new Error('EXPO_PUBLIC_OAUTH_REDIRECT_URI must be rita-id-app://redirect.');
+  if (origin.username || origin.password || origin.pathname !== "/" ||
+      (!development && origin.protocol !== "https:")) throw invalidOrigin();
+
+  const authorizeUrl = env.EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL ?? defaultAuthorizeUrl;
+  if (!/^rita-id:\/\/[a-z0-9_-]+(?:\/[a-z0-9_-]+)+$/.test(authorizeUrl)) {
+    throw new Error("Configure EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL as a Rita Võ ID app link.");
   }
-  const baseUrl = origin('EXPO_PUBLIC_RITA_BASE_URL');
-  return {
-    apiUrl: baseUrl + '/api',
-    portalUrl: baseUrl, clientId, redirectUri,
-    backendOrigin: origin('EXPO_PUBLIC_APP_BACKEND_BASE_URL'),
-  };
+  return { backendOrigin: origin.origin, authorizeUrl };
 }
 
 export function getAuthConfig(): AuthConfig {
-  // Expo substitutes statically referenced EXPO_PUBLIC properties.
   return readAuthConfig({
-    EXPO_PUBLIC_RITA_BASE_URL: process.env.EXPO_PUBLIC_RITA_BASE_URL,
-    EXPO_PUBLIC_OAUTH_CLIENT_ID: process.env.EXPO_PUBLIC_OAUTH_CLIENT_ID,
-    EXPO_PUBLIC_OAUTH_REDIRECT_URI: process.env.EXPO_PUBLIC_OAUTH_REDIRECT_URI,
     EXPO_PUBLIC_APP_BACKEND_BASE_URL: process.env.EXPO_PUBLIC_APP_BACKEND_BASE_URL,
+    EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL: process.env.EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL,
   }, __DEV__);
 }

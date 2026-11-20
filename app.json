@@ -1,13 +1,14 @@
 {
   "expo": {
-    "name": "RITA ID",
-    "slug": "rita-id-app",
+    "name": "Rita Partner Demo",
+    "slug": "rita-partner-demo",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "rita-id-app",
+    "scheme": "rita-partner-demo",
     "userInterfaceStyle": "automatic",
     "ios": {
+      "bundleIdentifier": "com.kompact.ritapartnerdemo",
       "icon": "./assets/expo.icon"
     },
     "android": {
@@ -18,7 +19,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.kompact.ritaidapp"
+      "package": "com.kompact.ritapartnerdemo"
     },
     "web": {
       "output": "static",

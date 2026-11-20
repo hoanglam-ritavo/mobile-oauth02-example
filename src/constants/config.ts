@@ -1,6 +1,6 @@
 declare const __DEV__: boolean;
 
-export const RITA_CALLBACK_URI = "rita-id-app://redirect";
+export const RITA_CALLBACK_URI = "rita-partner-demo://redirect";
 const defaultAuthorizeUrl = "rita-id://oauth/authorize";
 
 export interface AuthConfig {

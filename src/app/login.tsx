@@ -26,19 +26,19 @@ export default function LoginScreen() {
         <View style={styles.heroSection}>
           <View style={[styles.logoContainer, { backgroundColor: "#3b82f6" }]}>
             <ThemedText type="subtitle" style={styles.logoText}>
-              R
+              P
             </ThemedText>
           </View>
 
           <ThemedText type="title" style={styles.title}>
-            Rita ID
+            Rita Partner Demo
           </ThemedText>
           <ThemedText
             type="small"
             themeColor="textSecondary"
             style={styles.subtitle}
           >
-            Single Sign-On Identity & Access
+            Partner mobile app
           </ThemedText>
         </View>
 
@@ -112,7 +112,7 @@ export default function LoginScreen() {
             themeColor="textSecondary"
             style={styles.footerText}
           >
-            Rita ID SSO Identity System © 2026 RITA VO
+            Identity provider: Rita Võ ID
           </ThemedText>
         </View>
       </SafeAreaView>

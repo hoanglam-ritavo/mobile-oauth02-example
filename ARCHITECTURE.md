@@ -2,7 +2,7 @@
 
 [Setup and verification](README.md) · [Agent guidance](AGENTS.md)
 
-D is the Expo Router app for Android and iOS. D implements the app switch and callback handler for B's planned native authorization route. C owns confidential code exchange, user mapping and the D session. A is the Rita Võ ID Backend. See [B's implementation status](../rita-id-app/ARCHITECTURE.md#planned-partner-mobile-authorization) and [A's OAuth boundary](../rita-id-backend/ARCHITECTURE.md#partner-mobile-authorization). Web preview uses the existing web runtime and has sign-in disabled.
+D is Rita Partner Demo, an Expo Router app for Android and iOS. D opens B at `rita-id://oauth/authorize` and handles `rita-partner-demo://redirect` with its own native app identifiers. C owns confidential code exchange, user mapping and the D session. A is the Rita Võ ID Backend. See [B's native authorization flow](../rita-id-app/ARCHITECTURE.md#partner-mobile-authorization) and [A's OAuth boundary](../rita-id-backend/ARCHITECTURE.md#partner-mobile-authorization). Web preview uses the existing web runtime and has sign-in disabled.
 
 ## Ownership
 

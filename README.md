@@ -1,4 +1,4 @@
-# Rita ID Mobile integration example
+# Rita Partner Demo
 
 Expo and React Native example for Android and iOS. This source is **D**, the partner app. It opens **B**, the Rita Võ ID App, and uses **C**, the partner backend, for its session. **A**, the Rita Võ ID Backend, issues the OAuth code redeemed by C.
 
@@ -7,7 +7,7 @@ Read [Architecture](ARCHITECTURE.md) for runtime behavior and [Agent guidance](A
 ## Flow
 
 1. D creates a PKCE challenge and asks C for a login attempt. It saves the pending attempt in SecureStore before opening B.
-2. Once B has the planned native route, it authenticates the user as needed, handles Rita consent and returns to D through `rita-id-app://redirect`.
+2. B authenticates the user as needed, handles Rita consent and returns to D through `rita-partner-demo://redirect`.
 3. D validates the callback and sends the code and its verifier to C. C exchanges the code, maps the Rita employee and returns a pair of C tokens.
 4. D stores the refresh token in SecureStore and keeps access and profile in memory. Requests go to C. Sign-out clears local credentials and requests revocation of the C session.
 
@@ -23,9 +23,11 @@ if (!(Test-Path .env)) { Copy-Item .env.example .env }
 | Variable | Purpose |
 | --- | --- |
 | `EXPO_PUBLIC_APP_BACKEND_BASE_URL` | Device-reachable origin of C, e.g. `https://app.example.invalid`. Paths, credentials, queries and fragments are rejected. HTTPS is required in release. |
-| `EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL` | Entry for B's authorization screen. Defaults to `rita-id://oauth/authorize`. |
+| `EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL` | URL D opens to enter B's authorization screen. Defaults to `rita-id://oauth/authorize`. |
 
-The old Portal URL, public OAuth client ID and configurable callback settings belong to the former demo. The supported callback is fixed to `rita-id-app://redirect`; C supplies the client ID and must return the same registered callback. All `EXPO_PUBLIC_*` values are public bundle values. Keep `client_secret` in C.
+B returns to D through `rita-partner-demo://redirect`, fixed by `RITA_CALLBACK_URI` in [D's configuration](src/constants/config.ts). This callback needs no D environment variable. C supplies the client ID and returns its configured callback as `redirectUri` from `POST /api/mobile/auth/attempts`. D verifies it matches `RITA_CALLBACK_URI` exactly before opening B.
+
+Register `rita-partner-demo://redirect` for C's confidential OAuth client in A and set the same value as `RITA_REDIRECT_URI` in C. Keep `client_secret` in C. All `EXPO_PUBLIC_*` values are public bundle values. The Portal URL, public OAuth client ID and configurable callback settings belong to the former demo.
 
 Start C using its [README](../mobile-oauth02-example-backend/README.md). C defaults to port 3005. Android emulator development can point to `http://10.0.2.2:3005`. For a physical device, configure a reachable origin. A localhost address on the phone refers to the phone itself. Use HTTPS for a release and keep development services scoped to a controlled network.
 
@@ -35,7 +37,7 @@ npm run android
 npm run ios
 ```
 
-D registers `rita-id-app` and Android package `com.kompact.ritaidapp`. Device acceptance requires a build of B with the planned `rita-id://oauth/authorize` route and consent screen. The current B checkout has the `rita-id` scheme. See [B's implementation status](../rita-id-app/ARCHITECTURE.md#planned-partner-mobile-authorization). Restart Metro after updating public environment values. Native configuration changes require rebuilding and reinstalling. The web preview has sign-in disabled.
+D registers `rita-partner-demo` and the Android package and iOS bundle ID `com.kompact.ritapartnerdemo`. Install this build as a separate app and sign in again. Device acceptance requires a build of B with the `rita-id://oauth/authorize` route and consent screen. See [B's native authorization flow](../rita-id-app/ARCHITECTURE.md#partner-mobile-authorization). Restart Metro after updating public environment values. Generate native projects from the new manifest in a clean working copy before building and installing D. Existing generated Android/iOS projects can retain the former scheme and package identifiers. The web preview has sign-in disabled.
 
 ## Sessions and application requests
 
@@ -73,6 +75,8 @@ Use a dedicated shell for these environment assignments. Exports exercise bundli
 
 Documentation reconciliation on **2026-11-20**, against the existing D implementation and working tree. Markdown links, heading anchors and documented command paths were checked. The runtime results above remain the record of the earlier implementation checks.
 
+Partner identity update on **2026-11-20**. TypeScript and **40/40 tests** passed, including the native identity and exact callback contract. Expo config introspection in a clean working copy verified the Android intent filter and iOS URL types. Installed-device verification remains open.
+
 ### Historical verification snapshots
 
 The following records describe the earlier handoff demo. In those snapshots, A means the partner mobile app (now D), and B means the OAuth Web Example backend used by that demo.
@@ -109,7 +113,7 @@ Initial sandbox test/export attempts failed with subprocess `spawn EPERM`; permi
 
 ## Phase-2 acceptance checklist
 
-Once B's native route is available, install B and D and use the [current C contract](../mobile-oauth02-example-backend/README.md#hợp-đồng-với-d). Configure a Rita confidential client and the exact `rita-id-app://redirect` callback in A and C. On Android and iOS, test B with and without an existing session, new and previously granted consent, refusal, warm and cold D callbacks, duplicate callbacks, B absent, C restart and logout.
+Install the B build with native authorization and the new D build and use the [current C contract](../mobile-oauth02-example-backend/README.md#hợp-đồng-với-d). Configure a Rita confidential client and the exact `rita-partner-demo://redirect` callback in A and C. On Android and iOS, test B with and without an existing session, new and previously granted consent, refusal, warm and cold D callbacks, duplicate callbacks, B absent, C restart and logout.
 
 ## Historical documentation
 

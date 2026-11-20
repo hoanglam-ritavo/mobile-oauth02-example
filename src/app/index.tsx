@@ -52,8 +52,8 @@ export default function HomeScreen() {
       ]}>
       <View style={styles.content}>
         <View style={styles.header}>
-          <Text accessibilityLabel="Rita Võ ID" style={[styles.logo, { color: colors.brand }]}>
-            RITAVÕ<Text style={{ color: colors.text }}>.ID</Text>
+          <Text accessibilityLabel="Rita Partner Demo" style={[styles.logo, { color: colors.brand }]}>
+            Rita Partner Demo
           </Text>
           <Text style={[styles.label, { color: colors.textSecondary }]}>OAuth example</Text>
         </View>

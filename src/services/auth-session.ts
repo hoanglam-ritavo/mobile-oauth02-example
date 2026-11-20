@@ -1,11 +1,29 @@
 import type { AuthConfig } from "../constants/config";
 import { ApiError, ContractError, TransportError } from "./auth-service";
-import type { BackendApi, LoginCompletion, PrivateRequest, SessionGrant, UserProfile } from "./backend-service";
+import type {
+  BackendApi,
+  LoginCompletion,
+  PrivateRequest,
+  SessionGrant,
+  UserProfile,
+} from "./backend-service";
 import { authorizeUrl, readCallback } from "./oauth-flow";
-import type { SessionStorage, StoredAttempt, StoredSession } from "./session-storage";
+import type {
+  SessionStorage,
+  StoredAttempt,
+  StoredSession,
+} from "./session-storage";
 
 export interface AuthState {
-  status: "signedOut" | "loading" | "authenticated" | "waiting" | "handoff" | "unverified" | "cancelled" | "error";
+  status:
+    | "signedOut"
+    | "loading"
+    | "authenticated"
+    | "waiting"
+    | "handoff"
+    | "unverified"
+    | "cancelled"
+    | "error";
   user: UserProfile | null;
   error: string | null;
 }
@@ -23,13 +41,18 @@ export interface AuthDependencies {
   now?: () => number;
 }
 type Access = { token: string; expiresAt: number };
-type Completion = { payload: LoginCompletion; deadline: number; retryAt: number };
+type Completion = {
+  payload: LoginCompletion;
+  deadline: number;
+  retryAt: number;
+};
 
 class Superseded extends Error {}
 class StorageFailure extends Error {}
 const expiredLogin = "Yêu cầu đăng nhập đã hết hạn. Vui lòng bắt đầu lại.";
 const expiredSession = "Phiên đã kết thúc. Vui lòng đăng nhập lại.";
-const cleanupFailed = "Chưa thể xóa dữ liệu đăng nhập trên thiết bị. Vui lòng thử lại.";
+const cleanupFailed =
+  "Chưa thể xóa dữ liệu đăng nhập trên thiết bị. Vui lòng thử lại.";
 
 export class AuthSession {
   state: AuthState = { status: "loading", user: null, error: null };
@@ -56,20 +79,36 @@ export class AuthSession {
 
   subscribe(listener: (state: AuthState) => void) {
     this.listeners.add(listener);
-    return () => { this.listeners.delete(listener); };
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   connectLinks(): () => void {
     let connected = true;
-    const receive = (url: string) => { if (connected) void this.receiveCallback(url); };
+    const receive = (url: string) => {
+      if (connected) void this.receiveCallback(url);
+    };
     const unsubscribe = this.deps.links.subscribe(receive);
-    void this.deps.links.initial().then(url => { if (url) receive(url); }).catch(() => {});
-    return () => { connected = false; unsubscribe(); };
+    void this.deps.links
+      .initial()
+      .then((url) => {
+        if (url) receive(url);
+      })
+      .catch(() => {});
+    return () => {
+      connected = false;
+      unsubscribe();
+    };
   }
 
-  private emit(status: AuthState["status"], user: UserProfile | null = null, error: string | null = null) {
+  private emit(
+    status: AuthState["status"],
+    user: UserProfile | null = null,
+    error: string | null = null,
+  ) {
     this.state = { status, user, error };
-    this.listeners.forEach(listener => listener(this.state));
+    this.listeners.forEach((listener) => listener(this.state));
   }
 
   private current(epoch: number) {
@@ -78,15 +117,21 @@ export class AuthSession {
 
   private queue<T>(operation: () => Promise<T>) {
     const pending = this.storageQueue.then(operation);
-    this.storageQueue = pending.then(() => {}, () => {});
+    this.storageQueue = pending.then(
+      () => {},
+      () => {},
+    );
     return pending;
   }
 
   private async write(epoch: number, operation: () => Promise<void>) {
     await this.queue(async () => {
       this.current(epoch);
-      try { await operation(); }
-      catch { throw new StorageFailure(); }
+      try {
+        await operation();
+      } catch {
+        throw new StorageFailure();
+      }
       this.current(epoch);
     });
     this.current(epoch);
@@ -99,11 +144,18 @@ export class AuthSession {
 
   private watchDeadline(deadline: number) {
     this.stopTimer();
-    this.timer = setTimeout(() => { void this.expireLogin(); }, Math.max(0, deadline - this.now()));
+    this.timer = setTimeout(
+      () => {
+        void this.expireLogin();
+      },
+      Math.max(0, deadline - this.now()),
+    );
   }
 
   private async expireLogin(): Promise<boolean> {
-    const deadline = this.completion?.deadline ?? (this.waiting ? Date.parse(this.waiting.expiresAt) : Infinity);
+    const deadline =
+      this.completion?.deadline ??
+      (this.waiting ? Date.parse(this.waiting.expiresAt) : Infinity);
     if (this.now() < deadline) return false;
     await this.reset(expiredLogin);
     return true;
@@ -128,12 +180,20 @@ export class AuthSession {
         let stored = await this.deps.storage.loadSession();
         let attempt = await this.deps.storage.loadAttempt();
         this.current(epoch);
-        if (stored && (stored.backendOrigin !== this.deps.config.backendOrigin || Date.parse(stored.refreshExpiresAt) <= this.now())) {
+        if (
+          stored &&
+          (stored.backendOrigin !== this.deps.config.backendOrigin ||
+            Date.parse(stored.refreshExpiresAt) <= this.now())
+        ) {
           await this.deps.storage.clear();
           stored = null;
           attempt = null;
-        } else if (attempt && (stored || attempt.backendOrigin !== this.deps.config.backendOrigin ||
-                               Date.parse(attempt.expiresAt) <= this.now())) {
+        } else if (
+          attempt &&
+          (stored ||
+            attempt.backendOrigin !== this.deps.config.backendOrigin ||
+            Date.parse(attempt.expiresAt) <= this.now())
+        ) {
           await this.deps.storage.clearAttempt();
           attempt = null;
         }
@@ -149,14 +209,24 @@ export class AuthSession {
         }
       });
     } catch (error) {
-      if (epoch === this.epoch && !(error instanceof Superseded)) this.emit("error", null, cleanupFailed);
+      if (epoch === this.epoch && !(error instanceof Superseded))
+        this.emit("error", null, cleanupFailed);
     }
   }
 
   login = async () => {
     await this.initialize();
-    if (!this.initialized || this.resetting || this.starting || this.stored || this.waiting ||
-        this.completion || this.state.status === "error" || this.state.status === "loading") return;
+    if (
+      !this.initialized ||
+      this.resetting ||
+      this.starting ||
+      this.stored ||
+      this.waiting ||
+      this.completion ||
+      this.state.status === "error" ||
+      this.state.status === "loading"
+    )
+      return;
     const epoch = ++this.epoch;
     this.starting = true;
     this.emit("loading");
@@ -168,10 +238,17 @@ export class AuthSession {
       const result = await this.deps.backend.start(challenge);
       this.current(epoch);
       const now = this.now();
-      const deadline = Math.min(Date.parse(result.expiresAt), now + 10 * 60_000);
+      const deadline = Math.min(
+        Date.parse(result.expiresAt),
+        now + 10 * 60_000,
+      );
       if (!(deadline > now)) throw new ContractError();
       const record: StoredAttempt = {
-        version: 1, attemptId: result.attemptId, state: result.state, verifier, expiresAt: new Date(deadline).toISOString(),
+        version: 1,
+        attemptId: result.attemptId,
+        state: result.state,
+        verifier,
+        expiresAt: new Date(deadline).toISOString(),
         backendOrigin: this.deps.config.backendOrigin,
       };
       await this.write(epoch, () => this.deps.storage.saveAttempt(record));
@@ -179,12 +256,29 @@ export class AuthSession {
       this.waiting = record;
       this.watchDeadline(deadline);
       this.emit("waiting");
-      await this.deps.links.open(authorizeUrl(this.deps.config.authorizeUrl, result, challenge));
+      await this.deps.links.open(
+        authorizeUrl(this.deps.config.authorizeUrl, result, challenge),
+      );
     } catch (error) {
+      console.log(
+        " this.deps.config.backendOrigin : ",
+        this.deps.config.backendOrigin,
+      );
+      console.log("error logs : ", error);
+
       if (epoch !== this.epoch || (attempt && this.waiting !== attempt)) return;
-      if (attempt) await this.reset("Không mở được Rita Võ ID. Hãy kiểm tra ứng dụng đã được cài đặt.");
-      else if (error instanceof StorageFailure) await this.reset("Không thể lưu yêu cầu đăng nhập.");
-      else this.emit("signedOut", null, "Không thể bắt đầu đăng nhập. Vui lòng thử lại.");
+      if (attempt)
+        await this.reset(
+          "Không mở được Rita Võ ID. Hãy kiểm tra ứng dụng đã được cài đặt.",
+        );
+      else if (error instanceof StorageFailure)
+        await this.reset("Không thể lưu yêu cầu đăng nhập.");
+      else
+        this.emit(
+          "signedOut",
+          null,
+          "Không thể bắt đầu đăng nhập. Vui lòng thử lại (001).",
+        );
     } finally {
       if (epoch === this.epoch) this.starting = false;
     }
@@ -193,7 +287,13 @@ export class AuthSession {
   async receiveCallback(url: string) {
     await this.initialize();
     const attempt = this.waiting;
-    if (!attempt || this.resetting || await this.expireLogin() || this.waiting !== attempt) return;
+    if (
+      !attempt ||
+      this.resetting ||
+      (await this.expireLogin()) ||
+      this.waiting !== attempt
+    )
+      return;
     const result = readCallback(url, attempt.state);
     if (!result) return;
     const epoch = this.epoch;
@@ -207,22 +307,39 @@ export class AuthSession {
         this.emit("cancelled", null, "Đăng nhập đã được hủy.");
         return;
       }
-      const deadline = Math.min(Date.parse(attempt.expiresAt), receivedAt + 60_000);
+      const deadline = Math.min(
+        Date.parse(attempt.expiresAt),
+        receivedAt + 60_000,
+      );
       this.completion = {
-        payload: { attemptId: attempt.attemptId, state: attempt.state, code: result.code, codeVerifier: attempt.verifier },
-        deadline, retryAt: 0,
+        payload: {
+          attemptId: attempt.attemptId,
+          state: attempt.state,
+          code: result.code,
+          codeVerifier: attempt.verifier,
+        },
+        deadline,
+        retryAt: 0,
       };
       this.watchDeadline(deadline);
       await this.transfer();
     } catch {
-      if (epoch === this.epoch) await this.reset("Không thể dọn giao dịch đăng nhập trên thiết bị.");
+      if (epoch === this.epoch)
+        await this.reset("Không thể dọn giao dịch đăng nhập trên thiết bị.");
     }
   }
 
   private async transfer() {
     const completion = this.completion;
-    if (!completion || this.transferring || this.resetting || await this.expireLogin() ||
-        this.completion !== completion || this.transferring) return;
+    if (
+      !completion ||
+      this.transferring ||
+      this.resetting ||
+      (await this.expireLogin()) ||
+      this.completion !== completion ||
+      this.transferring
+    )
+      return;
     if (this.now() < completion.retryAt) {
       this.emit("handoff", null, "Dịch vụ đang bận. Vui lòng thử lại sau.");
       return;
@@ -246,13 +363,24 @@ export class AuthSession {
     } catch (error) {
       if (epoch !== this.epoch) return;
       if (this.now() >= completion.deadline) await this.reset(expiredLogin);
-      else if (error instanceof TransportError || (error instanceof ApiError && error.code === "CAPACITY_EXCEEDED")) {
-        completion.retryAt = error instanceof ApiError ? Math.min(error.retryAt, completion.deadline) : 0;
-        this.emit("handoff", null, "Chưa thể hoàn tất đăng nhập. Bạn có thể thử lại.");
+      else if (
+        error instanceof TransportError ||
+        (error instanceof ApiError && error.code === "CAPACITY_EXCEEDED")
+      ) {
+        completion.retryAt =
+          error instanceof ApiError
+            ? Math.min(error.retryAt, completion.deadline)
+            : 0;
+        this.emit(
+          "handoff",
+          null,
+          "Chưa thể hoàn tất đăng nhập. Bạn có thể thử lại.",
+        );
       } else {
-        const message = error instanceof ApiError && error.code === "RITA_ACCOUNT_INELIGIBLE"
-          ? "Tài khoản này chưa đủ điều kiện đăng nhập."
-          : "Không thể hoàn tất đăng nhập. Vui lòng bắt đầu lại.";
+        const message =
+          error instanceof ApiError && error.code === "RITA_ACCOUNT_INELIGIBLE"
+            ? "Tài khoản này chưa đủ điều kiện đăng nhập."
+            : "Không thể hoàn tất đăng nhập. Vui lòng bắt đầu lại.";
         await this.reset(message);
       }
     } finally {
@@ -261,27 +389,47 @@ export class AuthSession {
     }
   }
 
-  private async commit(grant: SessionGrant, epoch: number, deadline = Infinity): Promise<Access> {
-    const access = { token: grant.accessToken, expiresAt: Date.parse(grant.accessExpiresAt) };
+  private async commit(
+    grant: SessionGrant,
+    epoch: number,
+    deadline = Infinity,
+  ): Promise<Access> {
+    const access = {
+      token: grant.accessToken,
+      expiresAt: Date.parse(grant.accessExpiresAt),
+    };
     const refreshExpiry = Date.parse(grant.refreshExpiresAt);
-    if (access.expiresAt <= this.now() || refreshExpiry <= this.now() ||
-        (this.stored && (this.stored.userId !== grant.user.id || this.stored.refreshExpiresAt !== grant.refreshExpiresAt))) {
+    if (
+      access.expiresAt <= this.now() ||
+      refreshExpiry <= this.now() ||
+      (this.stored &&
+        (this.stored.userId !== grant.user.id ||
+          this.stored.refreshExpiresAt !== grant.refreshExpiresAt))
+    ) {
       throw new ContractError();
     }
     const stored: StoredSession = {
-      version: 3, refreshToken: grant.refreshToken, refreshExpiresAt: grant.refreshExpiresAt,
-      userId: grant.user.id, backendOrigin: this.deps.config.backendOrigin,
+      version: 3,
+      refreshToken: grant.refreshToken,
+      refreshExpiresAt: grant.refreshExpiresAt,
+      userId: grant.user.id,
+      backendOrigin: this.deps.config.backendOrigin,
     };
     await this.write(epoch, () => this.deps.storage.saveSession(stored));
-    if (access.expiresAt <= this.now() || deadline <= this.now()) throw new ContractError();
+    if (access.expiresAt <= this.now() || deadline <= this.now())
+      throw new ContractError();
     this.stored = stored;
     this.access = access;
     return access;
   }
 
   private async close(refreshToken: string): Promise<boolean> {
-    try { await this.deps.backend.logout(refreshToken); return true; }
-    catch { return false; }
+    try {
+      await this.deps.backend.logout(refreshToken);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private reset(message: string | null, refreshToken?: string) {
@@ -298,16 +446,26 @@ export class AuthSession {
     this.verification = undefined;
     this.stopTimer();
     this.emit("loading");
-    const closure = refreshToken ? this.close(refreshToken) : Promise.resolve(true);
+    const closure = refreshToken
+      ? this.close(refreshToken)
+      : Promise.resolve(true);
     const job = (async () => {
       try {
         await this.queue(this.deps.storage.clear);
         const closed = await closure;
-        this.emit("signedOut", null, closed ? message : "Đã đăng xuất trên thiết bị. Chưa xác nhận thu hồi phiên trên máy chủ.");
+        this.emit(
+          "signedOut",
+          null,
+          closed
+            ? message
+            : "Đã đăng xuất trên thiết bị. Chưa xác nhận thu hồi phiên trên máy chủ.",
+        );
       } catch {
         this.emit("error", null, cleanupFailed);
       }
-    })().finally(() => { this.resetting = undefined; });
+    })().finally(() => {
+      this.resetting = undefined;
+    });
     this.resetting = job;
     return job;
   }
@@ -322,8 +480,12 @@ export class AuthSession {
       throw new Superseded();
     }
     const access = this.access;
-    if (access && access.expiresAt > this.now() &&
-        (access.expiresAt - this.now() > 30_000 || access.expiresAt === expiresAt)) return access;
+    if (
+      access &&
+      access.expiresAt > this.now() &&
+      (access.expiresAt - this.now() > 30_000 || access.expiresAt === expiresAt)
+    )
+      return access;
     if (this.refreshInFlight) return this.refreshInFlight;
 
     const job = this.rotate(stored, epoch).finally(() => {
@@ -348,7 +510,7 @@ export class AuthSession {
 
   verify = async () => {
     await this.initialize();
-    if (this.resetting || await this.expireLogin() || !this.stored) return;
+    if (this.resetting || (await this.expireLogin()) || !this.stored) return;
     if (this.verification) return this.verification;
     const epoch = this.epoch;
     const job = this.checkProfile(epoch).finally(() => {
@@ -373,8 +535,14 @@ export class AuthSession {
       this.emit("authenticated", user);
     } catch (error) {
       if (epoch !== this.epoch || !access || this.access !== access) return;
-      if (error instanceof ApiError && error.status === 401) await this.reset(expiredSession, this.stored?.refreshToken);
-      else this.emit("unverified", null, "Không thể xác minh phiên. Vui lòng thử lại.");
+      if (error instanceof ApiError && error.status === 401)
+        await this.reset(expiredSession, this.stored?.refreshToken);
+      else
+        this.emit(
+          "unverified",
+          null,
+          "Không thể xác minh phiên. Vui lòng thử lại.",
+        );
     }
   }
 
@@ -389,11 +557,20 @@ export class AuthSession {
     const access = await this.accessFor(epoch);
     this.current(epoch);
     try {
-      const result = await this.deps.backend.privateRequest(access.token, path, options);
+      const result = await this.deps.backend.privateRequest(
+        access.token,
+        path,
+        options,
+      );
       this.current(epoch);
       return result;
     } catch (error) {
-      if (epoch === this.epoch && this.access === access && error instanceof ApiError && error.status === 401) {
+      if (
+        epoch === this.epoch &&
+        this.access === access &&
+        error instanceof ApiError &&
+        error.status === 401
+      ) {
         await this.reset(expiredSession, this.stored?.refreshToken);
       }
       throw error;

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import appConfig from "../app.json";
 import { test } from "node:test";
 import { RITA_CALLBACK_URI, readAuthConfig } from "../src/constants/config";
 import { ApiError, ContractError, TransportError, isExpiry } from "../src/services/auth-service";
@@ -25,6 +26,14 @@ test("public config requires a backend origin and only allows app links for B", 
   }
 });
 
+test("partner identity and callback match the native app registration", () => {
+  assert.equal(appConfig.expo.name, "Rita Partner Demo");
+  assert.equal(appConfig.expo.slug, "rita-partner-demo");
+  assert.equal(appConfig.expo.android.package, "com.kompact.ritapartnerdemo");
+  assert.equal(appConfig.expo.ios.bundleIdentifier, appConfig.expo.android.package);
+  assert.equal(RITA_CALLBACK_URI, appConfig.expo.scheme + "://redirect");
+});
+
 test("Rita app link carries only C's authorization parameters and PKCE challenge", () => {
   const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
   const challenge = base64Url(createHash("sha256").update(verifier).digest("base64"));
@@ -43,7 +52,7 @@ test("Rita app link carries only C's authorization parameters and PKCE challenge
 test("callback requires exact URI, matching state and a single code or error", () => {
   assert.deepEqual(readCallback(callback, attempt.state), { kind: "code", code });
   assert.deepEqual(readCallback(RITA_CALLBACK_URI + "?state=" + attempt.state + "&error=access_denied", attempt.state), { kind: "cancelled" });
-  for (const url of [callback.replace("rita-id-app", "other"), callback.replace("redirect?", "redirect/path?"),
+  for (const url of [callback.replace("rita-partner-demo", "rita-id-app"), callback.replace("redirect?", "redirect/path?"),
     callback.replace("redirect?", "redirect/?"), callback.replace(attempt.state, "wrong"),
     callback + "&state=again", callback + "&%63ode=a", callback + "&error=access_denied", callback + "#fragment",
     callback.replace("example-code", "%20"), callback.replace("example-code", "%a"), callback.replace("example-code", "%FF"), " " + callback]) {

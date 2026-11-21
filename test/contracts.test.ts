@@ -29,6 +29,7 @@ test("public config requires a backend origin and only allows app links for B", 
 test("partner identity and callback match the native app registration", () => {
   assert.equal(appConfig.expo.name, "Rita Partner Demo");
   assert.equal(appConfig.expo.slug, "rita-partner-demo");
+  assert.deepEqual(appConfig.expo.platforms, ["android", "ios"]);
   assert.equal(appConfig.expo.android.package, "com.kompact.ritapartnerdemo");
   assert.equal(appConfig.expo.ios.bundleIdentifier, appConfig.expo.android.package);
   assert.equal(RITA_CALLBACK_URI, appConfig.expo.scheme + "://redirect");
@@ -60,7 +61,7 @@ test("callback requires exact URI, matching state and a single code or error", (
   }
   assert.equal(redirectSystemPath({ path: callback, initial: true }), "/");
   assert.equal(redirectSystemPath({ path: "/redirect?code=x", initial: false }), "/");
-  assert.equal(redirectSystemPath({ path: "/explore", initial: false }), "/explore");
+  assert.equal(redirectSystemPath({ path: "/login", initial: false }), "/login");
 });
 
 test("C wire contract has exact payloads, no cookies, and only the private calls use Bearer", async () => {

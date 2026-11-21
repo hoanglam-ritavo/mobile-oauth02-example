@@ -2,13 +2,14 @@
 
 [Setup and verification](README.md) · [Agent guidance](AGENTS.md)
 
-D is Rita Partner Demo, an Expo Router app for Android and iOS. D opens B at `rita-id://oauth/authorize` and handles `rita-partner-demo://redirect` with its own native app identifiers. C owns confidential code exchange, user mapping and the D session. A is the Rita Võ ID Backend. See [B's native authorization flow](../rita-id-app/ARCHITECTURE.md#partner-mobile-authorization) and [A's OAuth boundary](../rita-id-backend/ARCHITECTURE.md#partner-mobile-authorization). Web preview uses the existing web runtime and has sign-in disabled.
+D is Rita Partner Demo, an Expo Router app for Android and iOS. D opens B at `rita-id://oauth/authorize` and handles `rita-partner-demo://redirect` with its own native app identifiers. C owns confidential code exchange, user mapping and the D session. A is the Rita Võ ID Backend. See [B's native authorization flow](../rita-id-app/ARCHITECTURE.md#partner-mobile-authorization) and [A's OAuth boundary](../rita-id-backend/ARCHITECTURE.md#partner-mobile-authorization).
 
 ## Ownership
 
 | Area | Responsibility |
 | --- | --- |
 | [Auth context](src/context/auth-context.tsx) | Attaches the native callback listener and foreground verification to the root. UI calls sign-in, retry, sign-out and private requests through `useAuth`. |
+| [Root stack](src/app/_layout.tsx) | Keeps the navigator mounted during session restoration, shows Login at `/login` while signed out, and protects Home at `/` until the C session is authenticated. An overlay reports loading and offers cancellation. |
 | [AuthSession](src/services/auth-session.ts) | Owns login/refresh state, generation checks, timers, coalescing, and serialized SecureStore operations. |
 | [Native runtime](src/services/auth-runtime.ts) | Injects Expo Crypto, Linking and SecureStore. Handles initial URLs and URL events through one coordinator. |
 | [OAuth helpers](src/services/oauth-flow.ts) | Builds the fixed B app link from the C-issued parameters. Validates the exact callback URI and state. |

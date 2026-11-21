@@ -1,3 +1,4 @@
+import { Stack } from "expo-router";
 import {
   DarkTheme,
   DefaultTheme,
@@ -14,42 +15,44 @@ import {
   Text,
 } from "react-native";
 
-import { AnimatedSplashOverlay } from "@/components/animated-icon";
-import AppTabs from "@/components/app-tabs";
 import { AuthProvider, useAuth } from "../context/auth-context";
-import LoginScreen from "./login";
 
 function AppContent() {
-  const { user, isLoading, logout } = useAuth();
+  const { status, user, isLoading, logout } = useAuth();
   const colorScheme = useColorScheme();
-
-  if (isLoading) {
-    return (
-      <>
-        <AnimatedSplashOverlay />
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#3b82f6" />
-          <Pressable onPress={logout} accessibilityRole="button">
-            <Text style={{ color: '#ffffff', padding: 16 }}>Cancel / sign out</Text>
-          </Pressable>
-        </View>
-      </>
-    );
-  }
-
-  if (!user) {
-    return <LoginScreen />;
-  }
+  const authenticated = status === "authenticated" && user !== null;
 
   return (
-    <>
-      <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
-      <AppTabs />
-    </>
+    <View style={styles.root}>
+      <View
+        style={styles.root}
+        accessibilityElementsHidden={isLoading}
+        importantForAccessibility={isLoading ? "no-hide-descendants" : "auto"}
+      >
+        <Stack screenOptions={{ headerShown: false, animation: "none" }}>
+          <Stack.Protected guard={authenticated}>
+            <Stack.Screen name="index" />
+          </Stack.Protected>
+          <Stack.Protected guard={!authenticated}>
+            <Stack.Screen name="login" />
+          </Stack.Protected>
+          <Stack.Screen name="redirect" />
+        </Stack>
+      </View>
+      {authenticated && <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />}
+      {isLoading && (
+        <View style={styles.loadingContainer} accessibilityViewIsModal>
+          <ActivityIndicator size="large" color="#3b82f6" accessibilityLabel="Đang xử lý đăng nhập" />
+          <Pressable onPress={logout} accessibilityRole="button">
+            <Text style={styles.loadingAction}>Cancel / sign out</Text>
+          </Pressable>
+        </View>
+      )}
+    </View>
   );
 }
 
-export default function TabLayout() {
+export default function RootLayout() {
   const colorScheme = useColorScheme();
   return (
     <AuthProvider>
@@ -61,6 +64,7 @@ export default function TabLayout() {
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1 },
   loadingContainer: {
     ...StyleSheet.absoluteFill,
     justifyContent: "center",
@@ -68,4 +72,5 @@ const styles = StyleSheet.create({
     backgroundColor: "#09090b",
     zIndex: 99,
   },
+  loadingAction: { color: "#ffffff", padding: 16 },
 });

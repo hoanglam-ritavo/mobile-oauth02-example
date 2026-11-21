@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import {
-  Platform, Pressable, ScrollView, StyleSheet, Text, View,
+  Pressable, ScrollView, StyleSheet, Text, View,
   useColorScheme, useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Fonts, HomeColors, type HomePalette } from '@/constants/theme';
 import { useAuth } from '@/context/auth-context';
+
+const contentPadding = 20;
 
 function DetailRow({ label, value, colors, first = false, mono = false }: {
   label: string;
@@ -40,16 +42,13 @@ export default function HomeScreen() {
   return (
     <ScrollView
       style={[styles.screen, { backgroundColor: colors.background }]}
-      contentInsetAdjustmentBehavior="automatic"
-      contentContainerStyle={[
-        styles.scrollContent,
-        // NativeTabs owns the bottom inset; iOS adjusts this root ScrollView automatically.
-        Platform.OS === 'android' && {
-          paddingTop: insets.top + 20,
-          paddingLeft: insets.left + 20,
-          paddingRight: insets.right + 20,
-        },
-      ]}>
+      contentInsetAdjustmentBehavior="never"
+      contentContainerStyle={[styles.scrollContent, {
+        paddingTop: insets.top + contentPadding,
+        paddingRight: insets.right + contentPadding,
+        paddingBottom: insets.bottom + contentPadding,
+        paddingLeft: insets.left + contentPadding,
+      }]}>
       <View style={styles.content}>
         <View style={styles.header}>
           <Text accessibilityLabel="Rita Partner Demo" style={[styles.logo, { color: colors.brand }]}>
@@ -109,7 +108,7 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  scrollContent: { padding: 20, alignItems: 'center' },
+  scrollContent: { alignItems: 'center' },
   content: { width: '100%', maxWidth: 560, gap: 24 },
   header: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   logo: { fontSize: 24, fontWeight: '900', letterSpacing: -0.8, flexShrink: 1 },

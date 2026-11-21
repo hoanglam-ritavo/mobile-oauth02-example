@@ -2,6 +2,8 @@
 
 Expo and React Native example for Android and iOS. This source is **D**, the partner app. It opens **B**, the Rita Võ ID App, and uses **C**, the partner backend, for its session. **A**, the Rita Võ ID Backend, issues the OAuth code redeemed by C.
 
+The example opens on Login when signed out and Home when the C session is valid. Home shows the application profile and offers sign-out.
+
 Read [Architecture](ARCHITECTURE.md) for runtime behavior and [Agent guidance](AGENTS.md) before changing this source.
 
 ## Flow
@@ -37,7 +39,7 @@ npm run android
 npm run ios
 ```
 
-D registers `rita-partner-demo` and the Android package and iOS bundle ID `com.kompact.ritapartnerdemo`. Install this build as a separate app and sign in again. Device acceptance requires a build of B with the `rita-id://oauth/authorize` route and consent screen. See [B's native authorization flow](../rita-id-app/ARCHITECTURE.md#partner-mobile-authorization). Restart Metro after updating public environment values. Generate native projects from the new manifest in a clean working copy before building and installing D. Existing generated Android/iOS projects can retain the former scheme and package identifiers. The web preview has sign-in disabled.
+D registers `rita-partner-demo` and the Android package and iOS bundle ID `com.kompact.ritapartnerdemo`. Install this build as a separate app and sign in again. Device acceptance requires a build of B with the `rita-id://oauth/authorize` route and consent screen. See [B's native authorization flow](../rita-id-app/ARCHITECTURE.md#partner-mobile-authorization). Restart Metro after updating public environment values. Generate native projects from the current manifest and lockfile in a clean working copy before building and installing D. Existing generated Android/iOS projects can retain former scheme, package, and plugin settings. Expo Go can preview JavaScript with a compatible SDK. The two-way OAuth handoff uses separately installed builds of B and D with their registered native schemes.
 
 ## Sessions and application requests
 
@@ -66,6 +68,12 @@ node node_modules/expo/bin/cli export --platform android --platform ios --output
 Use a dedicated shell for these environment assignments. Exports exercise bundling. For UI acceptance check both themes, long names and emails, large system text, accessibility labels and sign-out on installed builds.
 
 ## Current verification status
+
+2026-11-21, native-only cleanup against base revision `03d01b8`.
+
+- `npm ci` passed for the baseline and the updated lockfile. Direct runtime dependencies fell from 27 to 16, and installed packages fell from 619 to 589. Typecheck, all 40 tests, and `git diff --check` passed.
+- Android and iOS exports passed with the same fictional configuration. Android Hermes bytecode fell from 3,749,345 to 2,757,424 bytes (26.5%). iOS Hermes bytecode fell from 3,543,987 to 2,443,983 bytes (31.0%).
+- The generated Android manifest and introspected iOS URL types retained the `rita-partner-demo` scheme and package or bundle ID `com.kompact.ritapartnerdemo`. Installed-device and live OAuth checks remain pending.
 
 2026-11-20, base revision e2772f6 plus the D app-switch and C-session changes.
 

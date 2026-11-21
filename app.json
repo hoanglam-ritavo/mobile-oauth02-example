@@ -6,6 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "rita-partner-demo",
+    "platforms": ["android", "ios"],
     "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "com.kompact.ritapartnerdemo",
@@ -21,10 +22,6 @@
       "predictiveBackGestureEnabled": false,
       "package": "com.kompact.ritapartnerdemo"
     },
-    "web": {
-      "output": "static",
-      "favicon": "./assets/images/favicon.png"
-    },
     "plugins": [
       "expo-router",
       [
@@ -38,10 +35,7 @@
         }
       ],
       "expo-secure-store",
-      "expo-font",
-      "expo-image",
-      "expo-status-bar",
-      "expo-web-browser"
+      "expo-status-bar"
     ],
     "experiments": {
       "typedRoutes": true,

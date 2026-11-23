@@ -1,6 +1,8 @@
+import { isRunningInExpoGo } from "expo";
 import * as Crypto from "expo-crypto";
 import * as Linking from "expo-linking";
 import * as SecureStore from "expo-secure-store";
+import { Platform } from "react-native";
 import { getAuthConfig } from "../constants/config";
 import { AuthSession } from "./auth-session";
 import { createBackendApi } from "./backend-service";
@@ -8,7 +10,7 @@ import { base64Url, randomHex } from "./oauth-flow";
 import { createSessionStorage } from "./session-storage";
 
 export function createNativeAuthSession() {
-  const config = getAuthConfig();
+  const config = getAuthConfig(Platform.OS === "android" && isRunningInExpoGo());
   return new AuthSession({
     config,
     backend: createBackendApi(config),

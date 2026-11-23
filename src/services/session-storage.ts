@@ -1,3 +1,4 @@
+import { isExpoGoLink, RITA_CALLBACK_URI } from "../constants/config";
 import { isExpiry, isRecord, isToken, isUuid } from "./auth-service";
 import { isVerifier } from "./oauth-flow";
 
@@ -9,12 +10,13 @@ export interface StoredSession {
   backendOrigin: string;
 }
 export interface StoredAttempt {
-  version: 1;
+  version: 2;
   attemptId: string;
   state: string;
   verifier: string;
   expiresAt: string;
   backendOrigin: string;
+  callbackUri: string;
 }
 export interface KeyStorage {
   getItemAsync(key: string): Promise<string | null>;
@@ -23,6 +25,7 @@ export interface KeyStorage {
 }
 
 export const SESSION_KEY = "app_backend_session_v3";
+// Keep the existing key so an in-flight native attempt survives the record upgrade.
 export const ATTEMPT_KEY = "rita_login_attempt_v1";
 const LEGACY_KEYS = ["app_backend_session_v2", "rita_session_v1", "oauth_access_token", "oauth_refresh_token"];
 
@@ -69,13 +72,16 @@ export function createSessionStorage(storage: KeyStorage) {
       return storage.setItemAsync(SESSION_KEY, JSON.stringify({ version: 3, refreshToken, userId, refreshExpiresAt, backendOrigin }));
     },
     loadAttempt: () => load<StoredAttempt>(ATTEMPT_KEY, data => {
-      if (!isRecord(data) || data.version !== 1 || !isUuid(data.attemptId) || !isToken(data.state) ||
+      if (!isRecord(data) || (data.version !== 1 && data.version !== 2) || !isUuid(data.attemptId) || !isToken(data.state) ||
           !isVerifier(data.verifier) || !isExpiry(data.expiresAt) || !isOrigin(data.backendOrigin)) return null;
+      const callbackUri = data.version === 1 ? RITA_CALLBACK_URI : data.callbackUri;
+      if (typeof callbackUri !== "string" ||
+          (callbackUri !== RITA_CALLBACK_URI && !isExpoGoLink(callbackUri, "redirect"))) return null;
       const { attemptId, state, verifier, expiresAt, backendOrigin } = data;
-      return { version: 1, attemptId, state, verifier, expiresAt, backendOrigin };
+      return { version: 2, attemptId, state, verifier, expiresAt, backendOrigin, callbackUri };
     }),
-    saveAttempt({ attemptId, state, verifier, expiresAt, backendOrigin }: StoredAttempt) {
-      return storage.setItemAsync(ATTEMPT_KEY, JSON.stringify({ version: 1, attemptId, state, verifier, expiresAt, backendOrigin }));
+    saveAttempt({ attemptId, state, verifier, expiresAt, backendOrigin, callbackUri }: StoredAttempt) {
+      return storage.setItemAsync(ATTEMPT_KEY, JSON.stringify({ version: 2, attemptId, state, verifier, expiresAt, backendOrigin, callbackUri }));
     },
     clearAttempt: () => storage.deleteItemAsync(ATTEMPT_KEY),
     clear: () => remove([SESSION_KEY, ATTEMPT_KEY, ...LEGACY_KEYS]),

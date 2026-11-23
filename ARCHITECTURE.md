@@ -12,7 +12,7 @@ D is Rita Partner Demo, an Expo Router app for Android and iOS. D opens B at `ri
 | [Root stack](src/app/_layout.tsx) | Keeps the navigator mounted during session restoration, shows Login at `/login` while signed out, and protects Home at `/` until the C session is authenticated. An overlay reports loading and offers cancellation. |
 | [AuthSession](src/services/auth-session.ts) | Owns login/refresh state, generation checks, timers, coalescing, and serialized SecureStore operations. |
 | [Native runtime](src/services/auth-runtime.ts) | Injects Expo Crypto, Linking and SecureStore. Handles initial URLs and URL events through one coordinator. |
-| [OAuth helpers](src/services/oauth-flow.ts) | Builds the fixed B app link from the C-issued parameters. Validates the exact callback URI and state. |
+| [OAuth helpers](src/services/oauth-flow.ts) | Builds the configured B app link from the C-issued parameters. Validates the exact callback URI and state. |
 | [C adapter](src/services/backend-service.ts) | Starts and completes login, refreshes and logs out, validates application profiles, and authorizes private requests. |
 | [Storage](src/services/session-storage.ts) | Owns the separate, versioned allowlists for refresh credentials and pre-callback attempts. |
 | [Native intent](src/app/+native-intent.tsx) | Routes the callback to Home without copying OAuth query fields into the navigation state. Native Linking still receives the original URL. |
@@ -20,12 +20,14 @@ D is Rita Partner Demo, an Expo Router app for Android and iOS. D opens B at `ri
 ## Authorization and HTTP boundaries
 
 1. D generates a cryptographic PKCE verifier and posts its S256 challenge to C. D validates C's attempt ID, state, expiry, client ID, scope and exact registered callback.
-2. D persists the pending attempt before opening `rita-id://oauth/authorize`. A matching callback can finish after D is relaunched. The local pending record is bound to C's origin and capped at 10 minutes.
+2. D persists the pending attempt before opening the configured B entry. A matching callback can finish after D is relaunched. The record binds C's origin and the callback URI and is capped at 10 minutes. Older records use the native callback. A record is discarded if the callback configuration changes.
 3. D accepts the first callback with the exact URI, matching state and a single code or error. Invalid and duplicate URLs leave the active flow safe. D removes the stored attempt before sending the completion to C. Callback code and completion payload live in memory.
 4. A transport failure or a C `CAPACITY_EXCEEDED` response offers explicit retry with the same payload. The local retry window ends no later than 60 seconds after the first completion attempt and respects the original attempt expiry and Retry-After. An old completion response cannot publish a session. If D received a late refresh credential that it can identify, it requests revocation.
 5. C returns opaque access and refresh tokens and `user: { id, name, email }`. The UUID belongs to C. Home renders that profile and sign-out.
 
 D sends HTTP requests only to C, using a 10-second timeout, cookie omission and redirect rejection. Release builds require HTTPS. The adapter strips unknown response fields and reports controlled errors. The private helper restricts requests to literal paths under `/api/mobile/` and sends a Bearer access token. A protected business request is never replayed.
+
+Android development in Expo Go can select an explicit pair of `exp://` URLs. The same state, callback and PKCE checks apply. Native builds use the app schemes by default.
 
 See the [C API contract](../mobile-oauth02-example-backend/README.md#hợp-đồng-với-d) for routes and status codes and [device acceptance](README.md#phase-2-acceptance-checklist) for the remaining integration checks.
 

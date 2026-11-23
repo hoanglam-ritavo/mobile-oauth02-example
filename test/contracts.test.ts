@@ -8,7 +8,7 @@ import { createBackendApi } from "../src/services/backend-service";
 import { authorizeUrl, base64Url, readCallback, randomHex } from "../src/services/oauth-flow";
 import { ATTEMPT_KEY, createSessionStorage, SESSION_KEY } from "../src/services/session-storage";
 import { redirectSystemPath } from "../src/app/+native-intent";
-import { attempt, callback, code, completion, config, grant, pending, refreshExpiry, stored, user } from "./fixtures";
+import { attempt, callback, code, completion, config, expoGoConfig, grant, pending, refreshExpiry, stored, user } from "./fixtures";
 
 const env = { EXPO_PUBLIC_APP_BACKEND_BASE_URL: config.backendOrigin };
 
@@ -26,16 +26,20 @@ test("public config requires a backend origin and only allows app links for B", 
   }
 });
 
-test("public config accepts Expo Go authorization links only in development", () => {
+test("public config accepts paired Expo Go links only in Android Expo Go development", () => {
   for (const link of [
-    "exp://10.0.2.2:8081/--/oauth/authorize",
+    expoGoConfig.authorizeUrl,
     "exp://localhost:8087/--/oauth/authorize",
-    "exp://metro.example.invalid/--/oauth/authorize",
+    "exp://metro.example.invalid:8081/--/oauth/authorize",
     "exp://[::1]:65535/--/oauth/authorize",
   ]) {
-    const mobileEnv = { ...env, EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL: link };
-    assert.equal(readAuthConfig(mobileEnv, true).authorizeUrl, link);
-    assert.throws(() => readAuthConfig(mobileEnv, false), /rita-id:\/\/oauth\/authorize/);
+    const mobileEnv = {
+      ...env, EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL: link, EXPO_PUBLIC_RITA_CALLBACK_URI: expoGoConfig.callbackUri,
+    };
+    assert.deepEqual(readAuthConfig(mobileEnv, true, true), { ...expoGoConfig, authorizeUrl: link });
+    const runtimeError = /configured exp:\/\/ OAuth links require Android Expo Go development mode/;
+    assert.throws(() => readAuthConfig(mobileEnv, false, true), runtimeError);
+    assert.throws(() => readAuthConfig(mobileEnv, true, false), runtimeError);
   }
 
   assert.equal(readAuthConfig(env, true).authorizeUrl, config.authorizeUrl);
@@ -45,11 +49,22 @@ test("public config accepts Expo Go authorization links only in development", ()
   }, true).authorizeUrl, config.authorizeUrl);
 });
 
+test("a mixed native and Expo Go pair raises a URI configuration error even outside Expo Go", () => {
+  for (const variable of [
+    { EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL: expoGoConfig.authorizeUrl },
+    { EXPO_PUBLIC_RITA_CALLBACK_URI: expoGoConfig.callbackUri },
+  ]) {
+    assert.throws(() => readAuthConfig({ ...env, ...variable }, true, true), /as a matching native pair/);
+    assert.throws(() => readAuthConfig({ ...env, ...variable }), /as a matching native pair/);
+  }
+});
+
 test("public config rejects malformed Expo Go authorization links in development", () => {
   const entry = "exp://10.0.2.2:8081/--/oauth/authorize";
   for (const link of [
     "exp://10.0.2.2:8082/--/redirect",
     "exp://10.0.2.2:8081/oauth/authorize",
+    "exp://10.0.2.2/--/oauth/authorize",
     "exp:///--/oauth/authorize",
     "exp://metro..example.invalid/--/oauth/authorize",
     "exp://10.0.2.999/--/oauth/authorize",
@@ -63,8 +78,10 @@ test("public config rejects malformed Expo Go authorization links in development
     entry + "\n",
   ]) {
     assert.throws(
-      () => readAuthConfig({ ...env, EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL: link }, true),
-      /EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL.*Expo Go link/,
+      () => readAuthConfig({
+        ...env, EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL: link, EXPO_PUBLIC_RITA_CALLBACK_URI: expoGoConfig.callbackUri,
+      }, true, true),
+      /EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL.*Expo Go development/,
       link,
     );
   }
@@ -95,17 +112,34 @@ test("Rita app link carries only C's authorization parameters and PKCE challenge
 });
 
 test("callback requires exact URI, matching state and a single code or error", () => {
-  assert.deepEqual(readCallback(callback, attempt.state), { kind: "code", code });
-  assert.deepEqual(readCallback(RITA_CALLBACK_URI + "?state=" + attempt.state + "&error=access_denied", attempt.state), { kind: "cancelled" });
+  assert.deepEqual(readCallback(callback, attempt.state, config.callbackUri), { kind: "code", code });
+  assert.deepEqual(readCallback(RITA_CALLBACK_URI + "?state=" + attempt.state + "&error=access_denied", attempt.state, config.callbackUri), { kind: "cancelled" });
   for (const url of [callback.replace("rita-partner-demo", "rita-id-app"), callback.replace("redirect?", "redirect/path?"),
     callback.replace("redirect?", "redirect/?"), callback.replace(attempt.state, "wrong"),
     callback + "&state=again", callback + "&%63ode=a", callback + "&error=access_denied", callback + "#fragment",
     callback.replace("example-code", "%20"), callback.replace("example-code", "%a"), callback.replace("example-code", "%FF"), " " + callback]) {
-    assert.equal(readCallback(url, attempt.state), null);
+    assert.equal(readCallback(url, attempt.state, config.callbackUri), null);
   }
   assert.equal(redirectSystemPath({ path: callback, initial: true }), "/");
   assert.equal(redirectSystemPath({ path: "/redirect?code=x", initial: false }), "/");
   assert.equal(redirectSystemPath({ path: "/login", initial: false }), "/login");
+});
+
+test("Expo Go callback must match the configured host, port, route and state before a code can be redeemed", async () => {
+  const { callbackUri } = expoGoConfig;
+  const link = callback.replace(RITA_CALLBACK_URI, callbackUri);
+  assert.deepEqual(readCallback(link, attempt.state, callbackUri), { kind: "code", code });
+  assert.equal(readCallback(link, attempt.state, config.callbackUri), null);
+  for (const wrong of [link.replace("10.0.2.2", "other.example.invalid"), link.replace("8082", "8081"),
+    link.replace("/redirect?", "/redirect/extra?"), link.replace(attempt.state, "wrong")]) {
+    assert.equal(readCallback(wrong, attempt.state, callbackUri), null);
+  }
+  assert.equal(redirectSystemPath({ path: link, initial: true }), "/");
+  assert.equal(redirectSystemPath({ path: link.replace("8082", "8081"), initial: false }), "/");
+  const reply = { ...attempt, redirectUri: callbackUri };
+  const request = async () => Response.json(reply);
+  assert.deepEqual(await createBackendApi(expoGoConfig, request).start("a".repeat(43)), reply);
+  await assert.rejects(createBackendApi(config, request).start("a".repeat(43)), ContractError);
 });
 
 test("C wire contract has exact payloads, no cookies, and only the private calls use Bearer", async () => {
@@ -201,6 +235,9 @@ test("SecureStore has separate allowlists and migrates credentials from the prev
   await storage.saveSession({ ...stored, ...{ accessToken: grant.accessToken, user } });
   await storage.saveAttempt({ ...pending, ...{ code } });
   assert.deepEqual(await storage.loadSession(), stored);
+  assert.deepEqual(await storage.loadAttempt(), pending);
+  const { callbackUri: _, ...legacyAttempt } = pending;
+  values.set(ATTEMPT_KEY, JSON.stringify({ ...legacyAttempt, version: 1 }));
   assert.deepEqual(await storage.loadAttempt(), pending);
   assert.doesNotMatch(values.get(SESSION_KEY)!, /accessToken|example.invalid.*test/);
   assert.doesNotMatch(values.get(ATTEMPT_KEY)!, /example-code/);

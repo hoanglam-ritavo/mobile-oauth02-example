@@ -1,4 +1,3 @@
-import { RITA_CALLBACK_URI } from "../constants/config";
 import type { LoginAttempt } from "./backend-service";
 
 export const isVerifier = (value: unknown): value is string =>
@@ -14,13 +13,13 @@ export function authorizeUrl(entry: string, attempt: LoginAttempt, challenge: st
 
 type Callback = { kind: "code"; code: string } | { kind: "cancelled" };
 
-export function readCallback(value: string, state: string): Callback | null {
-  if (!value.startsWith(RITA_CALLBACK_URI + "?") || /[\x00-\x20\x7f#\\]/.test(value) ||
+export function readCallback(value: string, state: string, callbackUri: string): Callback | null {
+  if (!value.startsWith(callbackUri + "?") || /[\x00-\x20\x7f#\\]/.test(value) ||
       /%(?![0-9a-f]{2})/i.test(value)) return null;
   // The native URLSearchParams implementation exposes unique keys and can throw on invalid UTF-8.
   const query = new Map<string, string>();
   try {
-    for (const field of value.slice(RITA_CALLBACK_URI.length + 1).split("&")) {
+    for (const field of value.slice(callbackUri.length + 1).split("&")) {
       const separator = field.indexOf("=");
       if (separator <= 0) return null;
       const key = decodeURIComponent(field.slice(0, separator).replace(/\+/g, " "));

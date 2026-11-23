@@ -7,7 +7,7 @@ import { AuthSession, type AuthDependencies } from "../src/services/auth-session
 import type { LoginCompletion, SessionGrant } from "../src/services/backend-service";
 import { ATTEMPT_KEY, SESSION_KEY, createSessionStorage } from "../src/services/session-storage";
 import { createNativeAuthSession as webSession } from "../src/services/auth-runtime.web";
-import { attempt, callback, completion, config, grant, now, pending, refreshExpiry, stored, user, verifier } from "./fixtures";
+import { attempt, callback, completion, config, expoGoConfig, grant, now, pending, refreshExpiry, stored, user, verifier } from "./fixtures";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -16,7 +16,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function fixture(context: TestContext, values = new Map<string, string>()) {
+function fixture(context: TestContext, values = new Map<string, string>(), authConfig = config) {
   let clock = now;
   let onLink: ((url: string) => void) | undefined;
   const opened: string[] = [];
@@ -31,7 +31,7 @@ function fixture(context: TestContext, values = new Map<string, string>()) {
     accessExpiresAt: new Date(Math.min(clock + 15 * 60_000, Date.parse(refreshExpiry))).toISOString(),
   });
   const deps: AuthDependencies = {
-    config, now: () => clock, verifier: () => verifier,
+    config: authConfig, now: () => clock, verifier: () => verifier,
     challenge: async value => createHash("sha256").update(value).digest("base64url"),
     storage: createSessionStorage({
       getItemAsync: async key => values.get(key) ?? null,
@@ -46,7 +46,7 @@ function fixture(context: TestContext, values = new Map<string, string>()) {
     backend: {
       start: async challenge => {
         starts.push(challenge);
-        return { ...attempt, expiresAt: new Date(clock + 10 * 60_000).toISOString() };
+        return { ...attempt, redirectUri: authConfig.callbackUri, expiresAt: new Date(clock + 10 * 60_000).toISOString() };
       },
       complete: async payload => { completions.push(payload); return grant; },
       refresh: async token => { refreshes.push(token); return secondGrant(); },
@@ -112,6 +112,36 @@ test("a cold launch with a pending attempt deduplicates initial URL and warm eve
   assert.equal(f.starts.length, 0);
   assert.equal(f.completions.length, 1);
   disconnect();
+});
+
+test("Expo Go callback completes once after cold restore and a duplicate warm event", async context => {
+  const { callbackUri, authorizeUrl } = expoGoConfig;
+  const values = new Map<string, string>();
+  const first = fixture(context, values, expoGoConfig);
+  await first.session.login();
+  const opened = new URL(first.opened[0]);
+  assert.ok(first.opened[0].startsWith(authorizeUrl + "?"));
+  assert.equal(opened.searchParams.get("redirect_uri"), callbackUri);
+  assert.deepEqual(JSON.parse(values.get(ATTEMPT_KEY)!), { ...pending, callbackUri });
+  const second = fixture(context, values, expoGoConfig);
+  const url = callback.replace(config.callbackUri, callbackUri);
+  second.deps.links.initial = async () => url;
+  const disconnect = second.session.connectLinks();
+  context.after(disconnect);
+  second.deliver(url);
+  await second.session.verify();
+  await nextTurn();
+  assert.deepEqual(second.completions, [completion]);
+  assert.equal(second.session.state.status, "authenticated");
+  assert.ok(!values.has(ATTEMPT_KEY));
+});
+
+test("a changed OAuth mode discards a previously stored attempt", async context => {
+  const f = fixture(context, new Map([[ATTEMPT_KEY, JSON.stringify(pending)]]), expoGoConfig);
+  await f.session.receiveCallback(callback.replace(config.callbackUri, expoGoConfig.callbackUri));
+  assert.equal(f.session.state.status, "signedOut");
+  assert.equal(f.completions.length, 0);
+  assert.ok(!f.values.has(ATTEMPT_KEY));
 });
 
 test("detached native callback listeners do not deliver a late initial URL", async context => {

@@ -9,7 +9,7 @@ Read [Architecture](ARCHITECTURE.md) for runtime behavior and [Agent guidance](A
 ## Flow
 
 1. D creates a PKCE challenge and asks C for a login attempt. It saves the pending attempt in SecureStore before opening B.
-2. B authenticates the user as needed, handles Rita consent and returns to D through `rita-partner-demo://redirect`.
+2. B authenticates the user as needed, handles Rita consent and returns to D through the configured callback.
 3. D validates the callback and sends the code and its verifier to C. C exchanges the code, maps the Rita employee and returns a pair of C tokens.
 4. D stores the refresh token in SecureStore and keeps access and profile in memory. Requests go to C. Sign-out clears local credentials and requests revocation of the C session.
 
@@ -25,17 +25,25 @@ if (!(Test-Path .env)) { Copy-Item .env.example .env }
 | Variable | Purpose |
 | --- | --- |
 | `EXPO_PUBLIC_APP_BACKEND_BASE_URL` | Device-reachable origin of C, e.g. `https://app.example.invalid`. Paths, credentials, queries and fragments are rejected. HTTPS is required in release. |
-| `EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL` | URL D opens to enter B's authorization screen. Defaults to `rita-id://oauth/authorize`. Development also accepts the Expo Go route below. |
+| `EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL` | URL D opens to enter B's authorization screen. Defaults to `rita-id://oauth/authorize`. |
+| `EXPO_PUBLIC_RITA_CALLBACK_URI` | URL B opens to return the result to D. Defaults to `rita-partner-demo://redirect`. |
 
-B returns to D through `rita-partner-demo://redirect`, fixed by `RITA_CALLBACK_URI` in [D's configuration](src/constants/config.ts). This callback needs no D environment variable. C supplies the client ID and returns its configured callback as `redirectUri` from `POST /api/mobile/auth/attempts`. D verifies it matches `RITA_CALLBACK_URI` exactly before opening B.
+C supplies the client ID and returns its configured callback as `redirectUri` from `POST /api/mobile/auth/attempts`. D checks that it exactly matches the configured callback before opening B.
 
-Register `rita-partner-demo://redirect` for C's confidential OAuth client in A and set the same value as `RITA_REDIRECT_URI` in C. Keep `client_secret` in C. All `EXPO_PUBLIC_*` values are public bundle values. The Portal URL, public OAuth client ID and configurable callback settings belong to the former demo.
+For native builds, register `rita-partner-demo://redirect` for C's confidential OAuth client in A and set the same value as `RITA_REDIRECT_URI` in C. Keep `client_secret` in C. All `EXPO_PUBLIC_*` values are public bundle values.
 
 Start C using its [README](../mobile-oauth02-example-backend/README.md). C defaults to port 3005. Android emulator development can point to `http://10.0.2.2:3005`. For a physical device, configure a reachable origin. A localhost address on the phone refers to the phone itself. Use HTTPS for a release and keep development services scoped to a controlled network.
 
 ### Expo Go preview
 
-B and D both use Expo SDK 58. Install the SDK 58 build of [Expo Go for Android Emulator](https://expo.dev/go). To keep both projects available for preview, start Metro in separate PowerShell sessions.
+B and D both use Expo SDK 58. Android Expo Go development requires the same pair of URLs in both mobile projects. Use B's Metro host and port for the authorization entry and D's for the callback. Set the values without query parameters or fragments and restart both Metro processes after changing them.
+
+| Variable in B and D | Android emulator example |
+| --- | --- |
+| `EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL` | `exp://10.0.2.2:8081/--/oauth/authorize` |
+| `EXPO_PUBLIC_RITA_CALLBACK_URI` | `exp://10.0.2.2:8082/--/redirect` |
+
+Use a dedicated confidential client on a separate development instance of A. Register the same callback URI as the client's redirect URI in A and as `RITA_REDIRECT_URI` in C. Configure C with that client's credentials and restart it after changing its environment. Start Metro in separate terminals.
 
 ```powershell
 # In B
@@ -45,9 +53,9 @@ npx expo start --go --port 8081
 npx expo start --go --port 8082
 ```
 
-Open each project in the same Expo Go app to preview it. For D by itself, the existing `npm run android` script opens the Android preview on Metro's default port. The `npm run ios` script opens the iOS preview when a compatible simulator is available.
+Open each project in the same SDK 58 Expo Go app. Switching between the two projects and receiving OAuth callbacks in Expo Go still require device verification. The headless checks cover the URI contract, mocked link delivery and bundling.
 
-D accepts `exp://10.0.2.2:8081/--/oauth/authorize` as its authorization URL in development. Use B's Metro host and port and omit query parameters. This setting is for route previews. Completing sign-in uses the native handoff below.
+If External Mobile reports that the configured `exp://` OAuth links require Android Expo Go development mode, the URI pair passed format validation. Check that you opened the project in Expo Go on Android with a development bundle. The matching-pair error means the URI values themselves need checking.
 
 ### Native OAuth handoff
 

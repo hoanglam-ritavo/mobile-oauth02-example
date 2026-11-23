@@ -192,6 +192,7 @@ export class AuthSession {
           attempt &&
           (stored ||
             attempt.backendOrigin !== this.deps.config.backendOrigin ||
+            attempt.callbackUri !== this.deps.config.callbackUri ||
             Date.parse(attempt.expiresAt) <= this.now())
         ) {
           await this.deps.storage.clearAttempt();
@@ -244,12 +245,13 @@ export class AuthSession {
       );
       if (!(deadline > now)) throw new ContractError();
       const record: StoredAttempt = {
-        version: 1,
+        version: 2,
         attemptId: result.attemptId,
         state: result.state,
         verifier,
         expiresAt: new Date(deadline).toISOString(),
         backendOrigin: this.deps.config.backendOrigin,
+        callbackUri: result.redirectUri,
       };
       await this.write(epoch, () => this.deps.storage.saveAttempt(record));
       attempt = record;
@@ -259,13 +261,7 @@ export class AuthSession {
       await this.deps.links.open(
         authorizeUrl(this.deps.config.authorizeUrl, result, challenge),
       );
-    } catch (error: any) {
-      console.log(
-        " this.deps.config.backendOrigin : ",
-        this.deps.config.backendOrigin,
-      );
-      console.log("error logs : ", error?.data || error?.message || error);
-
+    } catch (error) {
       if (epoch !== this.epoch || (attempt && this.waiting !== attempt)) return;
       if (attempt)
         await this.reset(
@@ -294,7 +290,7 @@ export class AuthSession {
       this.waiting !== attempt
     )
       return;
-    const result = readCallback(url, attempt.state);
+    const result = readCallback(url, attempt.state, attempt.callbackUri);
     if (!result) return;
     const epoch = this.epoch;
     const receivedAt = this.now();

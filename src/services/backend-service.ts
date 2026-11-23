@@ -1,4 +1,4 @@
-import { RITA_CALLBACK_URI, type AuthConfig } from "../constants/config";
+import type { AuthConfig } from "../constants/config";
 import { ContractError, createJsonClient, isExpiry, isRecord, isToken, isUuid } from "./auth-service";
 
 export interface UserProfile {
@@ -71,7 +71,7 @@ export function createBackendApi(config: AuthConfig, request: typeof fetch = fet
       const data = await post("attempts", { codeChallenge });
       if (!isRecord(data) || !isUuid(data.attemptId) || !isToken(data.state) || !isExpiry(data.expiresAt) ||
           typeof data.clientId !== "string" || !/^[\x21-\x7e]{1,256}$/.test(data.clientId) ||
-          data.redirectUri !== RITA_CALLBACK_URI || data.scope !== "openid profile email") throw new ContractError();
+          data.redirectUri !== config.callbackUri || data.scope !== "openid profile email") throw new ContractError();
       return {
         attemptId: data.attemptId, state: data.state, expiresAt: data.expiresAt,
         clientId: data.clientId, redirectUri: data.redirectUri, scope: data.scope,

@@ -157,15 +157,28 @@ test("detached native callback listeners do not deliver a late initial URL", asy
   assert.equal(f.completions.length, 0);
 });
 
-test("matching denial clears the attempt without contacting C and allows a new login", async context => {
+test("denial requires matching state, skips completion and allows a new login", async context => {
   const f = fixture(context);
   await f.session.login();
-  await f.session.receiveCallback(attempt.redirectUri + "?state=" + attempt.state + "&error=access_denied");
+  assert.equal(f.starts.length, 1);
+  const savedAttempt = f.values.get(ATTEMPT_KEY);
+  assert.ok(savedAttempt);
+  const denialUrl = (state: string) => `${attempt.redirectUri}?state=${state}&error=access_denied`;
+
+  await f.session.receiveCallback(denialUrl("wrong-state"));
+  assert.equal(f.session.state.status, "waiting");
+  assert.equal(f.values.get(ATTEMPT_KEY), savedAttempt);
+  assert.equal(f.completions.length, 0);
+
+  await f.session.receiveCallback(denialUrl(attempt.state));
   assert.equal(f.session.state.status, "cancelled");
   assert.ok(!f.values.has(ATTEMPT_KEY));
   assert.equal(f.completions.length, 0);
+
   await f.session.login();
   assert.equal(f.session.state.status, "waiting");
+  assert.equal(f.starts.length, 2);
+  assert.ok(f.values.has(ATTEMPT_KEY));
 });
 
 test("failed app launch discards the attempt", async context => {

@@ -21,13 +21,13 @@ D is Rita Partner Demo, an Expo Router app for Android and iOS. D opens B at `ri
 
 1. D generates a cryptographic PKCE verifier and posts its S256 challenge to C. D validates C's attempt ID, state, expiry, client ID, scope and exact registered callback.
 2. D persists the pending attempt before opening the configured B entry. A matching callback can finish after D is relaunched. The record binds C's origin and the callback URI and is capped at 10 minutes. Older records use the native callback. A record is discarded if the callback configuration changes.
-3. D accepts the first callback with the exact URI, matching state and a single code or error. Invalid and duplicate URLs leave the active flow safe. D removes the stored attempt before sending the completion to C. Callback code and completion payload live in memory.
+3. D accepts the first callback with the exact URI, matching state and a single code or error. Invalid and duplicate URLs leave the active flow safe. B can return `access_denied` with the original state when the user returns before signing in or declines consent after signing in. D clears the stored attempt and reports cancellation without calling `POST /api/mobile/auth/session`. For a valid code, D clears the same record before sending the completion to C. Callback code and completion payload live in memory.
 4. A transport failure or a C `CAPACITY_EXCEEDED` response offers explicit retry with the same payload. The local retry window ends no later than 60 seconds after the first completion attempt and respects the original attempt expiry and Retry-After. An old completion response cannot publish a session. If D received a late refresh credential that it can identify, it requests revocation.
 5. C returns opaque access and refresh tokens and `user: { id, name, email }`. The UUID belongs to C. Home renders that profile and sign-out.
 
 D sends HTTP requests only to C, using a 10-second timeout, cookie omission and redirect rejection. Release builds require HTTPS. The adapter strips unknown response fields and reports controlled errors. The private helper restricts requests to literal paths under `/api/mobile/` and sends a Bearer access token. A protected business request is never replayed.
 
-Android development in Expo Go can select an explicit pair of `exp://` URLs. The same state, callback and PKCE checks apply. Native builds use the app schemes by default.
+Android development in Expo Go can configure a pair of `exp://` URLs in D. B derives the authorization entry from its advertised Metro `hostUri` and receives the callback in the OAuth request. D's configured callback matches C's `RITA_REDIRECT_URI` and the redirect URI registered in A. The same state, callback and PKCE checks apply. Native builds use the app schemes by default.
 
 See the [C API contract](../mobile-oauth02-example-backend/README.md#hợp-đồng-với-d) for routes and status codes and [device acceptance](README.md#phase-2-acceptance-checklist) for the remaining integration checks.
 

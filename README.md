@@ -9,8 +9,8 @@ Read [Architecture](ARCHITECTURE.md) for runtime behavior and [Agent guidance](A
 ## Flow
 
 1. D creates a PKCE challenge and asks C for a login attempt. It saves the pending attempt in SecureStore before opening B.
-2. B authenticates the user as needed, handles Rita consent and returns to D through the configured callback.
-3. D validates the callback and sends the code and its verifier to C. C exchanges the code, maps the Rita employee and returns a pair of C tokens.
+2. B returns through the registered callback after handling sign-in and consent. If the user returns to D before signing in, B checks the callback with A and returns `error=access_denied` with the original `state`. Declining consent after sign-in also returns `access_denied` with the original `state`.
+3. D checks the callback URI and `state`. A matching cancellation clears the pending attempt in D and skips `POST /api/mobile/auth/session`. If the callback has a valid code, D sends it with the verifier to C. C exchanges the code, maps the Rita employee and returns a pair of C tokens.
 4. D stores the refresh token in SecureStore and keeps access and profile in memory. Requests go to C. Sign-out clears local credentials and requests revocation of the C session.
 
 ## Configuration and native setup
@@ -36,14 +36,14 @@ Start C using its [README](../mobile-oauth02-example-backend/README.md). C defau
 
 ### Expo Go preview
 
-B and D both use Expo SDK 58. Android Expo Go development requires the same pair of URLs in both mobile projects. Use B's Metro host and port for the authorization entry and D's for the callback. Set the values without query parameters or fragments and restart both Metro processes after changing them.
+B and D both use Expo SDK 58. Set both variables below in D for Android Expo Go development. The authorization URL must use the exact Metro `hostUri` that B advertises. B derives its own entry from that host and port and takes the partner callback from the OAuth request. Use D's Metro host and port for the callback. Set both URLs without query parameters or fragments and restart D's Metro process after changing the variables.
 
-| Variable in B and D | Android emulator example |
+| Variable in D | Android emulator example |
 | --- | --- |
 | `EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL` | `exp://10.0.2.2:8081/--/oauth/authorize` |
 | `EXPO_PUBLIC_RITA_CALLBACK_URI` | `exp://10.0.2.2:8082/--/redirect` |
 
-Use a dedicated confidential client on a separate development instance of A. Register the same callback URI as the client's redirect URI in A and as `RITA_REDIRECT_URI` in C. Configure C with that client's credentials and restart it after changing its environment. Start Metro in separate terminals.
+Use a dedicated confidential client on a separate development instance of A. Register D's exact `EXPO_PUBLIC_RITA_CALLBACK_URI` as the client's redirect URI in A and set the same value as `RITA_REDIRECT_URI` in C. Configure C with that client's credentials and restart it after changing its environment. Start Metro in separate terminals.
 
 ```powershell
 # In B
@@ -88,6 +88,11 @@ node node_modules/expo/bin/cli export --platform android --platform ios --output
 Use a dedicated shell for these environment assignments. Exports exercise bundling. For UI acceptance check both themes, long names and emails, large system text, accessibility labels and sign-out on installed builds.
 
 ## Current verification status
+
+2026-11-23, OAuth callback documentation and denial regression against base revision `1b36fdd`.
+
+- All 46 contract and session tests passed using TypeScript output in a temporary directory and Node's in-process test runner. The TSX launcher hit `spawn EPERM` in the sandbox. The denial test verifies that a wrong state preserves the attempt, a matching state clears it without a completion request, and a fresh login can start.
+- Test TypeScript and `git diff --check` passed. The application typecheck still reports `TS2367` and `TS2538` in `src/hooks/use-theme.ts`. Installed-device handoff and live OAuth remain pending.
 
 2026-11-21, native-only cleanup against base revision `03d01b8`.
 
@@ -141,7 +146,12 @@ Initial sandbox test/export attempts failed with subprocess `spawn EPERM`; permi
 
 ## Phase-2 acceptance checklist
 
-Install the B build with native authorization and the new D build and use the [current C contract](../mobile-oauth02-example-backend/README.md#hợp-đồng-với-d). Configure a Rita confidential client and the exact `rita-partner-demo://redirect` callback in A and C. On Android and iOS, test B with and without an existing session, new and previously granted consent, refusal, warm and cold D callbacks, duplicate callbacks, B absent, C restart and logout.
+Install the B build with native authorization and the new D build and use the [current C contract](../mobile-oauth02-example-backend/README.md#hợp-đồng-với-d). Configure a Rita confidential client and the exact `rita-partner-demo://redirect` callback in A and C. Run the checklist on Android and iOS.
+
+- Complete login with and without an existing B session, and with new and previously granted consent.
+- Return to D using the return action on B's login screen while signed out. On Android, also test the system Back action.
+- Decline consent in B after signing in. For both cancellation paths, verify `access_denied` with the original `state`, cleared pending state in D, and an initial `/api/mobile/auth/attempts` request with no `/api/mobile/auth/session` request to C. Confirm a fresh login can start.
+- Check warm and cold D callbacks, duplicate callbacks, B absent, C restart and logout.
 
 ## Historical documentation
 

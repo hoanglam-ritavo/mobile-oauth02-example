@@ -26,6 +26,50 @@ test("public config requires a backend origin and only allows app links for B", 
   }
 });
 
+test("public config accepts Expo Go authorization links only in development", () => {
+  for (const link of [
+    "exp://10.0.2.2:8081/--/oauth/authorize",
+    "exp://localhost:8087/--/oauth/authorize",
+    "exp://metro.example.invalid/--/oauth/authorize",
+    "exp://[::1]:65535/--/oauth/authorize",
+  ]) {
+    const mobileEnv = { ...env, EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL: link };
+    assert.equal(readAuthConfig(mobileEnv, true).authorizeUrl, link);
+    assert.throws(() => readAuthConfig(mobileEnv, false), /rita-id:\/\/oauth\/authorize/);
+  }
+
+  assert.equal(readAuthConfig(env, true).authorizeUrl, config.authorizeUrl);
+  assert.equal(readAuthConfig({
+    ...env,
+    EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL: "rita-id://oauth/authorize",
+  }, true).authorizeUrl, config.authorizeUrl);
+});
+
+test("public config rejects malformed Expo Go authorization links in development", () => {
+  const entry = "exp://10.0.2.2:8081/--/oauth/authorize";
+  for (const link of [
+    "exp://10.0.2.2:8082/--/redirect",
+    "exp://10.0.2.2:8081/oauth/authorize",
+    "exp:///--/oauth/authorize",
+    "exp://metro..example.invalid/--/oauth/authorize",
+    "exp://10.0.2.999/--/oauth/authorize",
+    "exp://host:/--/oauth/authorize",
+    "exp://host:0/--/oauth/authorize",
+    "exp://host:65536/--/oauth/authorize",
+    "exp://user:pass@host/--/oauth/authorize",
+    "exp://host/--/other/../oauth/authorize",
+    entry + "?state=example",
+    entry + "#preview",
+    entry + "\n",
+  ]) {
+    assert.throws(
+      () => readAuthConfig({ ...env, EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL: link }, true),
+      /EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL.*Expo Go link/,
+      link,
+    );
+  }
+});
+
 test("partner identity and callback match the native app registration", () => {
   assert.equal(appConfig.expo.name, "Rita Partner Demo");
   assert.equal(appConfig.expo.slug, "rita-partner-demo");

@@ -8,6 +8,24 @@ export interface AuthConfig {
   authorizeUrl: string;
 }
 
+function isExpoGoAuthorizeUrl(value: string): boolean {
+  const match = /^exp:\/\/(\[[a-fA-F0-9:.]+\]|[a-zA-Z0-9.-]+)(?::([0-9]+))?\/--\/oauth\/authorize$/.exec(value);
+  if (!match || match[0] !== value) return false;
+
+  const [, hostname, port] = match;
+  if (port !== undefined && (Number(port) < 1 || Number(port) > 65535)) return false;
+  if (!hostname.startsWith("[") && !hostname.replace(/\.$/, "").split(".").every(
+    label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label),
+  )) return false;
+
+  try {
+    // Parse the host as HTTP because Expo Go uses it to reach Metro.
+    return new URL(`http://${hostname}`).hostname !== "";
+  } catch {
+    return false;
+  }
+}
+
 export function readAuthConfig(env: Record<string, string | undefined>, development = false): AuthConfig {
   const value = env.EXPO_PUBLIC_APP_BACKEND_BASE_URL;
   const invalidOrigin = () => new Error("Configure EXPO_PUBLIC_APP_BACKEND_BASE_URL as an HTTP(S) origin. HTTPS is required in release builds.");
@@ -22,8 +40,12 @@ export function readAuthConfig(env: Record<string, string | undefined>, developm
       (!development && origin.protocol !== "https:")) throw invalidOrigin();
 
   const authorizeUrl = env.EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL ?? defaultAuthorizeUrl;
-  if (!/^rita-id:\/\/[a-z0-9_-]+(?:\/[a-z0-9_-]+)+$/.test(authorizeUrl)) {
-    throw new Error("Configure EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL as a Rita Võ ID app link.");
+  const isNativeAuthorizeUrl = /^rita-id:\/\/[a-z0-9_-]+(?:\/[a-z0-9_-]+)+$/.test(authorizeUrl);
+  if (!isNativeAuthorizeUrl && !(development && isExpoGoAuthorizeUrl(authorizeUrl))) {
+    const expected = development
+      ? "a Rita Võ ID app link or an Expo Go link (exp://<metro-host>[:<port>]/--/oauth/authorize)"
+      : "a Rita Võ ID app link (rita-id://oauth/authorize)";
+    throw new Error(`Configure EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL as ${expected}.`);
   }
   return { backendOrigin: origin.origin, authorizeUrl };
 }

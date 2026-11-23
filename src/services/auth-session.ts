@@ -259,12 +259,12 @@ export class AuthSession {
       await this.deps.links.open(
         authorizeUrl(this.deps.config.authorizeUrl, result, challenge),
       );
-    } catch (error) {
+    } catch (error: any) {
       console.log(
         " this.deps.config.backendOrigin : ",
         this.deps.config.backendOrigin,
       );
-      console.log("error logs : ", error);
+      console.log("error logs : ", error?.data || error?.message || error);
 
       if (epoch !== this.epoch || (attempt && this.waiting !== attempt)) return;
       if (attempt)

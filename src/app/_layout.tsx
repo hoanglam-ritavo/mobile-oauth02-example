@@ -1,9 +1,4 @@
-import { Stack } from "expo-router";
-import {
-  DarkTheme,
-  DefaultTheme,
-  ThemeProvider,
-} from "expo-router/react-navigation";
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from "expo-router";
 import React from "react";
 import { StatusBar } from "expo-status-bar";
 import {

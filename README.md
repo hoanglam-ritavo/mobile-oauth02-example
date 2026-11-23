@@ -15,7 +15,7 @@ Read [Architecture](ARCHITECTURE.md) for runtime behavior and [Agent guidance](A
 
 ## Configuration and native setup
 
-Use Node.js 24 and the committed npm lockfile.
+Use Node.js 24.3 or newer on the Node.js 24 release line and the committed npm lockfile.
 
 ```powershell
 npm ci
@@ -25,7 +25,7 @@ if (!(Test-Path .env)) { Copy-Item .env.example .env }
 | Variable | Purpose |
 | --- | --- |
 | `EXPO_PUBLIC_APP_BACKEND_BASE_URL` | Device-reachable origin of C, e.g. `https://app.example.invalid`. Paths, credentials, queries and fragments are rejected. HTTPS is required in release. |
-| `EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL` | URL D opens to enter B's authorization screen. Defaults to `rita-id://oauth/authorize`. |
+| `EXPO_PUBLIC_RITA_APP_AUTHORIZE_URL` | URL D opens to enter B's authorization screen. Defaults to `rita-id://oauth/authorize`. Development also accepts the Expo Go route below. |
 
 B returns to D through `rita-partner-demo://redirect`, fixed by `RITA_CALLBACK_URI` in [D's configuration](src/constants/config.ts). This callback needs no D environment variable. C supplies the client ID and returns its configured callback as `redirectUri` from `POST /api/mobile/auth/attempts`. D verifies it matches `RITA_CALLBACK_URI` exactly before opening B.
 
@@ -33,13 +33,25 @@ Register `rita-partner-demo://redirect` for C's confidential OAuth client in A a
 
 Start C using its [README](../mobile-oauth02-example-backend/README.md). C defaults to port 3005. Android emulator development can point to `http://10.0.2.2:3005`. For a physical device, configure a reachable origin. A localhost address on the phone refers to the phone itself. Use HTTPS for a release and keep development services scoped to a controlled network.
 
+### Expo Go preview
+
+B and D both use Expo SDK 58. Install the SDK 58 build of [Expo Go for Android Emulator](https://expo.dev/go). To keep both projects available for preview, start Metro in separate PowerShell sessions.
+
 ```powershell
-npm run android
-# Requires macOS, Xcode and appropriate signing:
-npm run ios
+# In B
+npx expo start --go --port 8081
+
+# In D
+npx expo start --go --port 8082
 ```
 
-D registers `rita-partner-demo` and the Android package and iOS bundle ID `com.kompact.ritapartnerdemo`. Install this build as a separate app and sign in again. Device acceptance requires a build of B with the `rita-id://oauth/authorize` route and consent screen. See [B's native authorization flow](../rita-id-app/ARCHITECTURE.md#partner-mobile-authorization). Restart Metro after updating public environment values. Generate native projects from the current manifest and lockfile in a clean working copy before building and installing D. Existing generated Android/iOS projects can retain former scheme, package, and plugin settings. Expo Go can preview JavaScript with a compatible SDK. The two-way OAuth handoff uses separately installed builds of B and D with their registered native schemes.
+Open each project in the same Expo Go app to preview it. For D by itself, the existing `npm run android` script opens the Android preview on Metro's default port. The `npm run ios` script opens the iOS preview when a compatible simulator is available.
+
+D accepts `exp://10.0.2.2:8081/--/oauth/authorize` as its authorization URL in development. Use B's Metro host and port and omit query parameters. This setting is for route previews. Completing sign-in uses the native handoff below.
+
+### Native OAuth handoff
+
+D registers `rita-partner-demo` and the Android package and iOS bundle ID `com.kompact.ritapartnerdemo` in its native builds. The two-way OAuth handoff uses separately installed builds of B and D with their registered native schemes. Device acceptance requires a build of B with the `rita-id://oauth/authorize` route and consent screen. See [B's native authorization flow](../rita-id-app/ARCHITECTURE.md#partner-mobile-authorization). Restart Metro after updating public environment values. Generate native projects from the current manifest and lockfile in a clean working copy before building and installing D. Existing generated Android/iOS projects can retain former scheme, package, and plugin settings.
 
 ## Sessions and application requests
 

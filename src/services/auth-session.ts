@@ -262,6 +262,7 @@ export class AuthSession {
         authorizeUrl(this.deps.config.authorizeUrl, result, challenge),
       );
     } catch (error) {
+      console.log("Login failed:", error);
       if (epoch !== this.epoch || (attempt && this.waiting !== attempt)) return;
       if (attempt)
         await this.reset(

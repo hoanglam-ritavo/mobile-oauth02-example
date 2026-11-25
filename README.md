@@ -63,7 +63,11 @@ D registers `rita-partner-demo` and the Android package and iOS bundle ID `com.k
 
 ## Sessions and application requests
 
-A previously opened attempt can be restored on cold launch if the callback arrives before expiry. Only the first valid matching callback can claim it. D offers a short explicit retry after an uncertain completion or a temporary C capacity rejection. Refresh rotates both tokens and uncertain refresh requires login again. C stores data in RAM and resets sessions when it restarts.
+A previously opened attempt can be restored on cold launch if the callback arrives before expiry. Only the first valid matching callback can claim it. Once D accepts a code, it clears the pending attempt from SecureStore and keeps the completion payload in memory. If D restarts after that removal finishes and before it saves a session, start a fresh login.
+
+C preserves unused, unexpired attempts and valid sessions when it restarts with the same PostgreSQL database. If C stops during an exchange before recording the result, the attempt may require a fresh login once the exchange lease expires.
+
+D offers an explicit retry after an uncertain completion or a temporary C capacity rejection. D's retry deadline is the earlier of the original attempt expiry and 60 seconds after D accepts the matching code callback. C's replay window lasts 60 seconds from session issuance. After C restarts, retrying a recorded completion requires D to retain the payload, C to use the same `OAUTH_REPLAY_KEY`, and both windows to be open. Refresh rotates both tokens and uncertain refresh requires login again.
 
 Home displays name, email and the C user UUID. Private resources may use `useAuth().request('/api/mobile/me')` or other supported paths under `/api/mobile/`. Auth paths, encoded or foreign URLs, and automatic replay are excluded. See [session lifecycle and storage](ARCHITECTURE.md#session-lifecycle-and-storage).
 
@@ -88,6 +92,11 @@ node node_modules/expo/bin/cli export --platform android --platform ios --output
 Use a dedicated shell for these environment assignments. Exports exercise bundling. For UI acceptance check both themes, long names and emails, large system text, accessibility labels and sign-out on installed builds.
 
 ## Current verification status
+
+2026-11-25, PostgreSQL restart contract documentation and D session regressions against base revision `387159c`.
+
+- All 47 contract and session tests passed using TypeScript output in a temporary directory and Node's in-process test runner. Coverage includes warm and cold callbacks, state and denial, fresh login after D restarts during completion, explicit retry, terminal restart errors, and profile verification during session restore.
+- Test TypeScript and `git diff --check` passed. The application typecheck still reports `TS2367` and `TS2538` in `src/hooks/use-theme.ts`. Device handoff and live OAuth remain pending. C's restart persistence is verified by its own [PostgreSQL tests](../mobile-oauth02-example-backend/test/postgres.test.ts).
 
 2026-11-23, OAuth callback documentation and denial regression against base revision `1b36fdd`.
 
@@ -151,7 +160,10 @@ Install the B build with native authorization and the new D build and use the [c
 - Complete login with and without an existing B session, and with new and previously granted consent.
 - Return to D using the return action on B's login screen while signed out. On Android, also test the system Back action.
 - Decline consent in B after signing in. For both cancellation paths, verify `access_denied` with the original `state`, cleared pending state in D, and an initial `/api/mobile/auth/attempts` request with no `/api/mobile/auth/session` request to C. Confirm a fresh login can start.
-- Check warm and cold D callbacks, duplicate callbacks, B absent, C restart and logout.
+- Verify warm and cold callbacks while D still has the pending attempt. Restart D after it has cleared the pending attempt from SecureStore and before it saves a session. Verify a fresh login is required.
+- Restart C with the same PostgreSQL database and `OAUTH_REPLAY_KEY` after `POST /api/mobile/auth/attempts` and before the first `POST /api/mobile/auth/session`. Verify the unused, unexpired attempt completes normally.
+- With the same C restart configuration, verify that D can retry a recorded completion while it stays open and both windows are active. Verify a valid session can call `/me` and refresh with the same C user ID after C restarts.
+- Check duplicate callbacks, B absent and logout.
 
 ## Historical documentation
 

@@ -211,6 +211,10 @@ test("OS restart after callback processing cannot resume an in-memory completion
   await restarted.session.receiveCallback(callback);
   assert.equal(restarted.session.state.status, "signedOut");
   assert.equal(restarted.completions.length, 0);
+  await restarted.session.login();
+  assert.equal(restarted.session.state.status, "waiting");
+  assert.equal(restarted.starts.length, 1);
+  assert.ok(restarted.values.has(ATTEMPT_KEY));
 });
 
 for (const error of [new TransportError(), new ApiError(503, now + 15_000, "CAPACITY_EXCEEDED")]) {
@@ -251,15 +255,17 @@ test("login retry deadline is fixed even if Retry-After exceeds the remaining wi
   assert.equal(f.session.state.status, "signedOut");
 });
 
-test("a Rita retry prohibition ends the attempt even on HTTP 503", async context => {
-  const f = fixture(context);
-  let calls = 0;
-  f.deps.backend.complete = async () => { calls++; throw new ApiError(503, 0, "RITA_LOGIN_RESTART_REQUIRED"); };
-  await f.login();
-  await f.session.retry();
-  assert.equal(calls, 1);
-  assert.equal(f.session.state.status, "signedOut");
-});
+for (const [status, code] of [[401, "LOGIN_RESTART_REQUIRED"], [503, "RITA_LOGIN_RESTART_REQUIRED"]] as const) {
+  test(`${code} ends the attempt and requires a fresh login`, async context => {
+    const f = fixture(context);
+    let calls = 0;
+    f.deps.backend.complete = async () => { calls++; throw new ApiError(status, 0, code); };
+    await f.login();
+    await f.session.retry();
+    assert.equal(calls, 1);
+    assert.equal(f.session.state.status, "signedOut");
+  });
+}
 
 test("expired completion response is revoked instead of being stored", async context => {
   const f = fixture(context);

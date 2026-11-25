@@ -9,7 +9,7 @@ Read [Architecture](ARCHITECTURE.md) for runtime behavior and [Agent guidance](A
 ## Flow
 
 1. D creates a PKCE challenge and asks C for a login attempt. It saves the pending attempt in SecureStore before opening B.
-2. B returns through the registered callback after handling sign-in and consent. If the user returns to D before signing in, B checks the callback with A and returns `error=access_denied` with the original `state`. Declining consent after sign-in also returns `access_denied` with the original `state`.
+2. B returns through the registered callback after handling sign-in and consent. If the user returns to D before signing in, or cancels in B during the authorization check, B verifies the callback with A before returning `error=access_denied` with the original `state`. Declining consent after sign-in also returns `access_denied` with the original `state`.
 3. D checks the callback URI and `state`. A matching cancellation clears the pending attempt in D and skips `POST /api/mobile/auth/session`. If the callback has a valid code, D sends it with the verifier to C. C exchanges the code, maps the Rita employee and returns a pair of C tokens.
 4. D stores the refresh token in SecureStore and keeps access and profile in memory. Requests go to C. Sign-out clears local credentials and requests revocation of the C session.
 
@@ -93,6 +93,11 @@ Use a dedicated shell for these environment assignments. Exports exercise bundli
 
 ## Current verification status
 
+2026-11-25, cancellation and reentry regression against base revision `8ecc409`.
+
+- All 48 contract and session tests passed using temporary TypeScript output and Node's in-process test runner. The new test verifies that late success and denial callbacks from a canceled attempt leave the next attempt waiting. Denial for the current state clears the attempt without a completion request.
+- Test TypeScript passed. The TSX launcher hit `spawn EPERM` in the sandbox. The application typecheck still reports `TS2367` and `TS2538` in `src/hooks/use-theme.ts`. Installed-device acceptance remains pending.
+
 2026-11-25, PostgreSQL restart contract documentation and D session regressions against base revision `387159c`.
 
 - All 47 contract and session tests passed using TypeScript output in a temporary directory and Node's in-process test runner. Coverage includes warm and cold callbacks, state and denial, fresh login after D restarts during completion, explicit retry, terminal restart errors, and profile verification during session restore.
@@ -159,7 +164,8 @@ Install the B build with native authorization and the new D build and use the [c
 
 - Complete login with and without an existing B session, and with new and previously granted consent.
 - Return to D using the return action on B's login screen while signed out. On Android, also test the system Back action.
-- Decline consent in B after signing in. For both cancellation paths, verify `access_denied` with the original `state`, cleared pending state in D, and an initial `/api/mobile/auth/attempts` request with no `/api/mobile/auth/session` request to C. Confirm a fresh login can start.
+- Cancel in B during the signed-in authorization check and decline after consent appears. For each cancellation path, verify `access_denied` with the original `state`, cleared pending state in D, and an initial `/api/mobile/auth/attempts` request with no `/api/mobile/auth/session` request to C. Confirm a fresh login can start.
+- Return to D, cancel there and start a fresh attempt while B still holds the previous request. Verify B continues with the new state and D leaves the new attempt waiting if a callback for the previous state arrives.
 - Verify warm and cold callbacks while D still has the pending attempt. Restart D after it has cleared the pending attempt from SecureStore and before it saves a session. Verify a fresh login is required.
 - Restart C with the same PostgreSQL database and `OAUTH_REPLAY_KEY` after `POST /api/mobile/auth/attempts` and before the first `POST /api/mobile/auth/session`. Verify the unused, unexpired attempt completes normally.
 - With the same C restart configuration, verify that D can retry a recorded completion while it stays open and both windows are active. Verify a valid session can call `/me` and refresh with the same C user ID after C restarts.

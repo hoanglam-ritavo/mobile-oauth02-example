@@ -181,6 +181,38 @@ test("denial requires matching state, skips completion and allows a new login", 
   assert.ok(f.values.has(ATTEMPT_KEY));
 });
 
+test("after local cancellation, old callbacks leave the next attempt waiting", async context => {
+  const f = fixture(context);
+  const start = f.deps.backend.start;
+  const nextState = "n".repeat(43);
+  f.deps.backend.start = async challenge => {
+    const result = await start(challenge);
+    return f.starts.length === 1 ? result : {
+      ...result, attemptId: "43de7959-77bf-45bd-856e-42fdb79b7c77", state: nextState,
+    };
+  };
+
+  await f.session.login();
+  await f.session.logout();
+  assert.equal(f.session.state.status, "signedOut");
+  assert.ok(!f.values.has(ATTEMPT_KEY));
+  await f.session.login();
+  assert.equal(f.starts.length, 2);
+  const nextAttempt = f.values.get(ATTEMPT_KEY);
+  assert.ok(nextAttempt);
+  assert.equal(JSON.parse(nextAttempt).state, nextState);
+
+  const denial = (state: string) => `${attempt.redirectUri}?state=${state}&error=access_denied`;
+  await f.session.receiveCallback(callback);
+  await f.session.receiveCallback(denial(attempt.state));
+  assert.equal(f.session.state.status, "waiting");
+  assert.equal(f.values.get(ATTEMPT_KEY), nextAttempt);
+  await f.session.receiveCallback(denial(nextState));
+  assert.equal(f.session.state.status, "cancelled");
+  assert.ok(!f.values.has(ATTEMPT_KEY));
+  assert.equal(f.completions.length, 0);
+});
+
 test("failed app launch discards the attempt", async context => {
   const f = fixture(context);
   f.deps.links.open = async () => { throw new Error("app unavailable"); };
